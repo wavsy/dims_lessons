@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { EB_Garamond, Nunito, Plus_Jakarta_Sans } from "next/font/google";
+import { Caveat, EB_Garamond, Nunito, Plus_Jakarta_Sans } from "next/font/google";
 import { cookies } from "next/headers";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages, getTranslations, setRequestLocale } from "next-intl/server";
@@ -14,6 +14,7 @@ import "../globals.css";
 const nunito = Nunito({ subsets: ["latin", "cyrillic"], variable: "--font-nunito" });
 const jakarta = Plus_Jakarta_Sans({ subsets: ["latin"], variable: "--font-jakarta" });
 const garamond = EB_Garamond({ subsets: ["latin", "cyrillic"], variable: "--font-garamond" });
+const caveat = Caveat({ subsets: ["latin", "cyrillic"], variable: "--font-caveat" });
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +49,7 @@ export default async function LocaleLayout({
   return (
     <html
       lang={locale}
-      className={`${nunito.variable} ${jakarta.variable} ${garamond.variable}${theme === "dark" ? " dark" : ""}`}
+      className={`${nunito.variable} ${jakarta.variable} ${garamond.variable} ${caveat.variable}${theme === "dark" ? " dark" : ""}`}
       suppressHydrationWarning
     >
       <body className="font-sans antialiased">
