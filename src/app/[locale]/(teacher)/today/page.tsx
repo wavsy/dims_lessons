@@ -19,14 +19,14 @@ export default async function TodayPage({
   const query = await searchParams;
   const archived = query.view === "archive";
   const session = await requireSession("teacher");
-  const teacher = getTeacherById(session.user_id)!;
+  const teacher = (await getTeacherById(session.user_id))!;
   const locale = await getLocale();
   const t = await getTranslations("today");
   const clientCopy = await getTranslations("client");
   const common = await getTranslations("common");
   const status = await getTranslations("status");
   const options = await choiceOptions();
-  const clients = listClients(teacher.id, archived ? "archived" : "active").sort((a, b) => {
+  const clients = (await listClients(teacher.id, archived ? "archived" : "active")).sort((a, b) => {
     const left = packRank(describePack(a.billing_mode, a.stats, packText(status)).tone);
     const right = packRank(describePack(b.billing_mode, b.stats, packText(status)).tone);
     if (left !== right) return left - right;

@@ -145,7 +145,7 @@ export function ClientBoard({
       </ul>
       {panel ? (
         <div className="fixed inset-0 z-40">
-          <button type="button" className="absolute inset-0 bg-ink/30 backdrop-blur-[2px]" aria-label={closeLabel} onClick={close} />
+          <button type="button" className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" aria-label={closeLabel} onClick={close} />
           <div className="pointer-events-none relative flex h-full items-end justify-center p-3 sm:items-center sm:p-8">
             <div
               role="dialog"

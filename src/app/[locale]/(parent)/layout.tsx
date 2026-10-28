@@ -1,7 +1,7 @@
 import { getTranslations } from "next-intl/server";
 import { redirect } from "@/i18n/navigation";
 import { Shell } from "@/components/shell";
-import { getSession, homeFor } from "@/lib/auth";
+import { getSession, homeFor, passwordStillNeeded } from "@/lib/auth";
 
 export default async function ParentLayout({
   children,
@@ -18,6 +18,10 @@ export default async function ParentLayout({
   }
   if (session.role !== "parent") {
     redirect({ href: homeFor(session.role), locale });
+    throw new Error("Redirect failed");
+  }
+  if (await passwordStillNeeded()) {
+    redirect({ href: "/account/password", locale });
     throw new Error("Redirect failed");
   }
   const t = await getTranslations("nav");

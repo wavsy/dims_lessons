@@ -10,20 +10,23 @@ import { describePack, packFigure } from "@/lib/stats";
 
 export default async function MoneyPage() {
   const session = await requireSession("teacher");
-  const teacher = getTeacherById(session.user_id)!;
+  const teacher = (await getTeacherById(session.user_id))!;
   const locale = await getLocale();
   const t = await getTranslations("money");
   const clientCopy = await getTranslations("client");
   const status = await getTranslations("status");
-  const cards = listClients(teacher.id)
-    .map((client) => {
-      const pack = packFigure(client.billing_mode, client.stats);
-      const described = describePack(client.billing_mode, client.stats, (key, values) =>
-        status(key as "leftOne", values as never),
-      );
-      return { client, pack, described, parents: listParentsOfClient(client.id) };
-    })
-    .filter(({ pack }) => pack.kind === "over" || (pack.kind === "left" && pack.count <= 2));
+  const clients = await listClients(teacher.id);
+  const cards = (
+    await Promise.all(
+      clients.map(async (client) => {
+        const pack = packFigure(client.billing_mode, client.stats);
+        const described = describePack(client.billing_mode, client.stats, (key, values) =>
+          status(key as "leftOne", values as never),
+        );
+        return { client, pack, described, parents: await listParentsOfClient(client.id) };
+      }),
+    )
+  ).filter(({ pack }) => pack.kind === "over" || (pack.kind === "left" && pack.count <= 2));
 
   return (
     <div>
@@ -39,16 +42,16 @@ export default async function MoneyPage() {
                 <h2 className="font-display text-3xl">{client.name}</h2>
               </Link>
               <StatusLine text={described.text} tone={described.tone} />
+              {client.pays_self ? <p className="mt-2 text-sm text-soft">{clientCopy("paysSelf")}</p> : null}
               <p className="mt-4 text-sm font-bold tracking-[0.14em] text-soft uppercase">{t("reach")}</p>
               {parents.length === 0 ? <p className="mt-2 text-sm text-soft">{t("noPayer")}</p> : null}
               <ul className="mt-3 space-y-3">
                 {parents.map((parent) => {
-                  const self = parent.public_code === client.public_code;
                   const email = parent.email.endsWith("@lessons.local") ? "" : parent.email;
                   return (
                     <li key={parent.id} className="rounded-3xl bg-paper px-4 py-3">
-                      <p className="font-bold">{self ? client.name : parent.name}</p>
-                      <p className="text-sm text-soft">{self ? clientCopy("paysSelf") : t("payer")}</p>
+                      <p className="font-bold">{parent.name}</p>
+                      <p className="text-sm text-soft">{t("payer")}</p>
                       {parent.public_code ? <p className="mt-1 text-sm tracking-[0.16em] text-soft">{formatCode(parent.public_code)}</p> : null}
                       {parent.phone ? (
                         <p className="mt-2 text-sm">

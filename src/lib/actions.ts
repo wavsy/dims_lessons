@@ -4,56 +4,52 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { getLocale } from "next-intl/server";
 import { redirect } from "@/i18n/navigation";
-import { cookieOptions, getSession, homeFor, SESSION_COOKIE } from "./auth";
-import {
-  BILLING_MODES,
-  isOneOf,
-  KINDS,
-  LOCATIONS,
-  PLATFORMS,
-  SUBJECTS,
-} from "./constants";
+import { inviteParent } from "./accounts";
+import { cookieOptions, getSession, homeFor, passwordStillNeeded, STUDENT_COOKIE } from "./auth";
+import { BILLING_MODES, isOneOf, KINDS, LOCATIONS, PLATFORMS, SUBJECTS } from "./constants";
 import {
   answerFeedbackRequest,
-  authenticate,
   clearStudentPin,
-  createSession,
+  createStudentSession,
   deleteClient,
   deleteLesson,
   deletePayment,
-  deleteSession,
+  deleteStudentSession,
   emailTaken,
   getClient,
   getFeedbackRequest,
   getLesson,
+  getParentByCode,
+  getParentRequest,
   getPayment,
   getRegistration,
-  getParentByCode,
-  getTeacher,
   getTeacherByEmail,
   insertClient,
   insertFeedbackNote,
   insertFeedbackRequest,
   insertLesson,
   insertPayment,
-  setClientDeal,
   insertRegistration,
   linkParent,
-  unlinkParent,
   markPaysForSelf,
+  matchStudent,
   parentLinkedTo,
+  requestParentLink,
+  setClientDeal,
   setClientStatus,
   setFeedbackArchived,
+  setParentRequestStatus,
   setRegistrationStatus,
   setStudentPin,
+  unlinkParent,
   updateClient,
   updateLesson,
   updateParentLocale,
   updateTeacher,
   updateTeacherLocale,
-  upsertParent,
 } from "./db";
 import { isEmail, parseCount, parseHours, parseMoney, parsePackHours, todayISO } from "./format";
+import { createClient } from "./supabase/server";
 
 function refresh() {
   revalidatePath("/en", "layout");
@@ -88,6 +84,13 @@ async function requireParent() {
   return must(session);
 }
 
+async function clearStudentCookie() {
+  const jar = await cookies();
+  const student = jar.get(STUDENT_COOKIE)?.value;
+  if (student) await deleteStudentSession(student);
+  jar.delete(STUDENT_COOKIE);
+}
+
 function choices(form: FormData) {
   const subject = field(form, "subject");
   const platform = field(form, "platform");
@@ -110,22 +113,65 @@ export async function signInWithPassword(form: FormData) {
   const email = field(form, "email").toLowerCase();
   const password = field(form, "password");
   const current = await getLocale();
-  const account = authenticate(email, password);
-  if (!account) {
+  const supabase = await createClient();
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
     redirect({ href: { pathname: "/login", query: { error: "invalid" } }, locale: current });
     throw new Error("Redirect failed");
   }
-  const session = createSession(account.role, account.userId);
+  await clearStudentCookie();
+  const session = await getSession();
+  if (!session || session.role === "student") {
+    await supabase.auth.signOut();
+    redirect({ href: { pathname: "/login", query: { error: "invalid" } }, locale: current });
+    throw new Error("Redirect failed");
+  }
+  if (session.role === "parent" && (await passwordStillNeeded())) {
+    redirect({ href: "/account/password", locale: current });
+    throw new Error("Redirect failed");
+  }
+  redirect({ href: homeFor(session.role), locale: current });
+}
+
+export async function signInStudent(form: FormData) {
+  const current = await getLocale();
+  const match = await matchStudent(field(form, "name"), field(form, "pin"));
+  if (!match) {
+    redirect({ href: { pathname: "/login", query: { error: "student" } }, locale: current });
+    throw new Error("Redirect failed");
+  }
+  const supabase = await createClient();
+  await supabase.auth.signOut();
+  const session = await createStudentSession(match.id);
   const jar = await cookies();
-  jar.set(SESSION_COOKIE, session.id, cookieOptions);
-  redirect({ href: homeFor(account.role), locale: current });
+  jar.set(STUDENT_COOKIE, session.id, cookieOptions);
+  redirect({ href: "/my", locale: current });
+}
+
+export async function choosePassword(form: FormData) {
+  const password = field(form, "password");
+  const current = await getLocale();
+  if (password.length < 8) await go("/account/password", { error: "short" });
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getUser();
+  if (!data.user) await go("/login");
+  const { error } = await supabase.auth.updateUser({ password, data: { must_set_password: false } });
+  if (error) await go("/account/password", { error: "required" });
+  const session = await getSession();
+  redirect({ href: session ? homeFor(session.role) : "/login", locale: current });
 }
 
 export async function signOutAction() {
   const jar = await cookies();
-  const id = jar.get(SESSION_COOKIE)?.value;
-  if (id) deleteSession(id);
-  jar.delete(SESSION_COOKIE);
+  const student = jar.get(STUDENT_COOKIE)?.value;
+  if (student) await deleteStudentSession(student);
+  jar.delete(STUDENT_COOKIE);
+  try {
+    const supabase = await createClient();
+    await supabase.auth.signOut();
+  } catch {
+    // A student session has no Supabase user.
+  }
   const current = await getLocale();
   redirect({ href: "/", locale: current });
 }
@@ -134,28 +180,22 @@ export async function rememberLocale(next: string) {
   if (next !== "en" && next !== "bg") return;
   const session = await getSession();
   if (!session) return;
-  if (session.role === "teacher") updateTeacherLocale(session.user_id, next);
-  if (session.role === "parent") updateParentLocale(session.user_id, next);
+  if (session.role === "teacher") await updateTeacherLocale(session.user_id, next);
+  if (session.role === "parent") await updateParentLocale(session.user_id, next);
 }
 
 export async function submitRegistration(form: FormData) {
   const paysSelf = field(form, "paysSelf") === "1";
   const code = field(form, "teacherCode").replace(/\D/g, "");
-  const teacher = getTeacher();
   const childName = field(form, "childName");
   const email = field(form, "email").toLowerCase();
   const parentName = paysSelf ? childName : field(form, "parentName");
   const subject = field(form, "subject") || "math";
   const back = { code, pays: paysSelf ? "1" : "0" };
-  if (!teacher?.public_code || code !== teacher.public_code) {
-    await go("/register", { error: "unknownCode", ...back });
-  }
   if (!parentName || !childName || !isEmail(email) || !isOneOf(SUBJECTS, subject)) {
     await go("/register", { error: "required", ...back });
   }
-  if (emailTaken(email)) await go("/register", { error: "emailTaken", ...back });
-
-  insertRegistration({
+  const result = await insertRegistration(code, {
     parent_name: parentName,
     parent_email: email,
     parent_phone: field(form, "phone"),
@@ -170,8 +210,35 @@ export async function submitRegistration(form: FormData) {
     portrait: field(form, "portrait") === "boy" ? "boy" : "girl",
     pays_self: paysSelf ? 1 : 0,
   });
+  if (result) await go("/register", { error: result, ...back });
   refresh();
   await go("/register", { sent: "1" });
+}
+
+export async function requestParentJoin(form: FormData) {
+  const code = field(form, "code").replace(/\D/g, "");
+  const name = field(form, "name");
+  const email = field(form, "email").toLowerCase();
+  if (!name || !isEmail(email) || !/^\d{6}$/.test(code)) await go("/join", { error: "required", code });
+  const result = await requestParentLink({ code, name, email });
+  if (result) await go("/join", { error: result, code });
+  refresh();
+  await go("/join", { sent: "1" });
+}
+
+async function connectParent(input: {
+  name: string;
+  email: string;
+  phone: string;
+  social: string;
+  occupation: string;
+}) {
+  try {
+    return await inviteParent({ ...input, locale: await getLocale() });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("email_taken")) return null;
+    throw error;
+  }
 }
 
 export async function createClientAction(form: FormData) {
@@ -203,11 +270,24 @@ export async function createClientAction(form: FormData) {
   if (parentEmail && (!isEmail(parentEmail) || !parentName)) {
     await go("/clients/new", { error: "required" });
   }
-  if (parentEmail && getTeacherByEmail(parentEmail)) {
+  if (parentEmail && (await getTeacherByEmail(parentEmail))) {
     await go("/clients/new", { error: "emailTaken" });
   }
 
-  const id = insertClient({
+  let parentId = "";
+  if (parentEmail) {
+    const parent = await connectParent({
+      name: parentName,
+      email: parentEmail,
+      phone: field(form, "parentPhone"),
+      social: field(form, "parentSocial"),
+      occupation: field(form, "parentOccupation"),
+    });
+    if (!parent) await go("/clients/new", { error: "emailTaken" });
+    parentId = must(parent).id;
+  }
+
+  const id = await insertClient({
     teacherId: session.user_id,
     name,
     kind: choice.kind,
@@ -224,7 +304,7 @@ export async function createClientAction(form: FormData) {
   });
 
   if (amountCents > 0 || lessonsAdded > 0 || hoursAdded > 0) {
-    insertPayment({
+    await insertPayment({
       clientId: id,
       paidOn: todayISO(),
       amountCents,
@@ -233,16 +313,7 @@ export async function createClientAction(form: FormData) {
     });
   }
 
-  if (parentEmail) {
-    const parent = upsertParent({
-      name: parentName,
-      email: parentEmail,
-      phone: field(form, "parentPhone"),
-      social: field(form, "parentSocial"),
-      occupation: field(form, "parentOccupation"),
-    });
-    linkParent(id, parent.id);
-  }
+  if (parentId) await linkParent(id, parentId);
 
   refresh();
   await go(`/clients/${id}`);
@@ -250,7 +321,7 @@ export async function createClientAction(form: FormData) {
 
 async function ownedClient(clientId: string) {
   const session = await requireTeacher();
-  const client = getClient(clientId);
+  const client = await getClient(clientId);
   if (!client || client.teacher_id !== session.user_id) await go("/today");
   return must(client);
 }
@@ -264,7 +335,7 @@ export async function logQuickLesson(
   if (!Number.isFinite(hours) || hours <= 0 || hours > 12) return;
   const platform = !input.platform ? "" : isOneOf(PLATFORMS, input.platform) ? input.platform : client.platform_default;
   const location = !input.location ? "" : isOneOf(LOCATIONS, input.location) ? input.location : client.location_default;
-  insertLesson({
+  await insertLesson({
     clientId: client.id,
     occurredOn: todayISO(),
     subject: client.subject_default,
@@ -286,7 +357,7 @@ export async function logDetailedLesson(form: FormData) {
     await go(`/clients/${client.id}`, { error: "required" });
   }
   const choice = must(picked);
-  insertLesson({
+  await insertLesson({
     clientId: client.id,
     occurredOn: date,
     subject: choice.subject,
@@ -301,7 +372,7 @@ export async function logDetailedLesson(form: FormData) {
 }
 
 export async function updateLessonAction(form: FormData) {
-  const found = getLesson(field(form, "lessonId"));
+  const found = await getLesson(field(form, "lessonId"));
   if (!found) await go("/today");
   const lesson = must(found);
   const client = await ownedClient(lesson.client_id);
@@ -312,7 +383,7 @@ export async function updateLessonAction(form: FormData) {
     await go(`/clients/${client.id}`, { error: "required", panel: "lessons" });
   }
   const choice = must(picked);
-  updateLesson(lesson.id, {
+  await updateLesson(lesson.id, {
     occurredOn: date,
     subject: choice.subject,
     platform: choice.platform,
@@ -326,11 +397,11 @@ export async function updateLessonAction(form: FormData) {
 }
 
 export async function removeLesson(form: FormData) {
-  const found = getLesson(field(form, "lessonId"));
+  const found = await getLesson(field(form, "lessonId"));
   if (!found) await go("/today");
   const lesson = must(found);
   await ownedClient(lesson.client_id);
-  deleteLesson(lesson.id);
+  await deleteLesson(lesson.id);
   refresh();
   await go(`/clients/${lesson.client_id}`);
 }
@@ -340,7 +411,7 @@ export async function noteDeal(clientId: string, billing: string, priceCents: nu
   if (billing !== "per_lesson" && billing !== "per_hour") return;
   if (!Number.isInteger(priceCents) || priceCents <= 0 || priceCents > 100_000_00) return;
   if (client.price_cents === priceCents && client.billing_mode === billing) return;
-  setClientDeal(client.id, priceCents, billing);
+  await setClientDeal(client.id, priceCents, billing);
   refresh();
 }
 
@@ -370,9 +441,9 @@ export async function addPayment(form: FormData) {
   }
   const price = parseMoney(field(form, "price"));
   if ((mode === "per_lesson" || mode === "per_hour") && price != null && price > 0) {
-    if (price !== client.price_cents || mode !== client.billing_mode) setClientDeal(client.id, price, mode);
+    if (price !== client.price_cents || mode !== client.billing_mode) await setClientDeal(client.id, price, mode);
   }
-  insertPayment({
+  await insertPayment({
     clientId: client.id,
     paidOn: date,
     amountCents: cents,
@@ -384,11 +455,11 @@ export async function addPayment(form: FormData) {
 }
 
 export async function removePayment(form: FormData) {
-  const found = getPayment(field(form, "paymentId"));
+  const found = await getPayment(field(form, "paymentId"));
   if (!found) await go("/today");
   const payment = must(found);
   await ownedClient(payment.client_id);
-  deletePayment(payment.id);
+  await deletePayment(payment.id);
   refresh();
   await go(`/clients/${payment.client_id}`);
 }
@@ -400,7 +471,7 @@ export async function saveProfile(form: FormData) {
   const price = parseMoney(field(form, "price"));
   if (!name || !picked || price === null) await go(`/clients/${client.id}`, { error: "required", edit: "profile" });
   const choice = must(picked);
-  updateClient(client.id, {
+  await updateClient(client.id, {
     name,
     kind: choice.kind,
     subject: choice.subject,
@@ -420,21 +491,21 @@ export async function saveProfile(form: FormData) {
 
 export async function archiveStudent(form: FormData) {
   const client = await ownedClient(field(form, "clientId"));
-  setClientStatus(client.id, "archived");
+  await setClientStatus(client.id, "archived");
   refresh();
   await go("/today", { view: "archive" });
 }
 
 export async function restoreStudent(form: FormData) {
   const client = await ownedClient(field(form, "clientId"));
-  setClientStatus(client.id, "active");
+  await setClientStatus(client.id, "active");
   refresh();
   await go("/today");
 }
 
 export async function removeStudent(form: FormData) {
   const client = await ownedClient(field(form, "clientId"));
-  deleteClient(client.id);
+  await deleteClient(client.id);
   refresh();
   await go("/today");
 }
@@ -442,12 +513,12 @@ export async function removeStudent(form: FormData) {
 export async function savePin(form: FormData) {
   const client = await ownedClient(field(form, "clientId"));
   if (form.get("clearPin") === "on") {
-    clearStudentPin(client.id);
+    await clearStudentPin(client.id);
   } else {
     const pin = field(form, "pin");
     if (pin) {
       if (!/^\d{4,6}$/.test(pin)) await go(`/clients/${client.id}`, { error: "invalidPin", panel: "profile" });
-      setStudentPin(client.id, pin);
+      await setStudentPin(client.id, pin);
     }
   }
   refresh();
@@ -459,15 +530,15 @@ export async function linkParentAction(form: FormData) {
   const email = field(form, "parentEmail").toLowerCase();
   const name = field(form, "parentName");
   if (!name || !isEmail(email)) await go(`/clients/${client.id}`, { error: "required" });
-  if (getTeacherByEmail(email)) await go(`/clients/${client.id}`, { error: "emailTaken" });
-  const parent = upsertParent({
+  const parent = await connectParent({
     name,
     email,
     phone: field(form, "parentPhone"),
     social: field(form, "parentSocial"),
     occupation: field(form, "parentOccupation"),
   });
-  linkParent(client.id, parent.id);
+  if (!parent) await go(`/clients/${client.id}`, { error: "emailTaken" });
+  await linkParent(client.id, must(parent).id);
   refresh();
   await go(`/clients/${client.id}`);
 }
@@ -477,13 +548,13 @@ export async function linkParentByCode(form: FormData) {
   const code = field(form, "code").replace(/\s/g, "");
   if (!/^\d{6}$/.test(code)) await go(`/clients/${client.id}`, { error: "unknownCode" });
   if (code === client.public_code) {
-    markPaysForSelf(client.id);
+    await markPaysForSelf(client.id);
     refresh();
     await go(`/clients/${client.id}`, { saved: "1" });
   }
-  const parent = getParentByCode(code);
+  const parent = await getParentByCode(code);
   if (!parent) await go(`/clients/${client.id}`, { error: "unknownCode" });
-  linkParent(client.id, must(parent).id);
+  await linkParent(client.id, must(parent).id);
   refresh();
   await go(`/clients/${client.id}`, { saved: "1" });
 }
@@ -491,26 +562,34 @@ export async function linkParentByCode(form: FormData) {
 export async function unlinkParentAction(form: FormData) {
   const client = await ownedClient(field(form, "clientId"));
   const parentId = field(form, "parentId");
-  if (parentId && parentLinkedTo(parentId, client.id)) unlinkParent(client.id, parentId);
+  if (parentId && (await parentLinkedTo(parentId, client.id))) await unlinkParent(client.id, parentId);
   refresh();
   await go(`/clients/${client.id}`, { panel: "parents" });
 }
 
 export async function markSelfPayer(form: FormData) {
   const client = await ownedClient(field(form, "clientId"));
-  markPaysForSelf(client.id);
+  await markPaysForSelf(client.id);
   refresh();
   await go(`/clients/${client.id}`, { saved: "1" });
 }
 
 export async function acceptRegistration(form: FormData) {
   const session = await requireTeacher();
-  const found = getRegistration(field(form, "id"));
+  const found = await getRegistration(field(form, "id"));
   if (!found || found.status !== "pending") await go("/registrations");
   const registration = must(found);
-  if (getTeacherByEmail(registration.parent_email)) await go("/registrations", { error: "emailTaken" });
+  if (await getTeacherByEmail(registration.parent_email)) await go("/registrations", { error: "emailTaken" });
 
-  const clientId = insertClient({
+  const parent = await connectParent({
+    name: registration.pays_self ? registration.child_name : registration.parent_name,
+    email: registration.parent_email,
+    phone: registration.parent_phone,
+    social: registration.parent_social,
+    occupation: registration.parent_occupation,
+  });
+  if (!parent) await go("/registrations", { error: "emailTaken" });
+  const clientId = await insertClient({
     teacherId: session.user_id,
     name: registration.child_name,
     kind: "student",
@@ -524,26 +603,49 @@ export async function acceptRegistration(form: FormData) {
     interests: registration.interests,
     ambitions: registration.ambitions,
     portrait: registration.portrait === "boy" ? "boy" : "girl",
+    paysSelf: Boolean(registration.pays_self),
   });
-  const created = getClient(clientId);
-  const parent = upsertParent({
-    name: registration.pays_self ? registration.child_name : registration.parent_name,
-    email: registration.parent_email,
-    phone: registration.parent_phone,
-    social: registration.parent_social,
-    occupation: registration.parent_occupation,
-    publicCode: registration.pays_self ? created?.public_code : undefined,
-  });
-  linkParent(clientId, parent.id);
-  setRegistrationStatus(registration.id, "accepted");
+  await linkParent(clientId, must(parent).id);
+  await setRegistrationStatus(registration.id, "accepted");
   refresh();
   await go(`/clients/${clientId}`);
 }
 
 export async function declineRegistration(form: FormData) {
   await requireTeacher();
-  const registration = getRegistration(field(form, "id"));
-  if (registration && registration.status === "pending") setRegistrationStatus(registration.id, "declined");
+  const registration = await getRegistration(field(form, "id"));
+  if (registration && registration.status === "pending") await setRegistrationStatus(registration.id, "declined");
+  refresh();
+  await go("/registrations");
+}
+
+export async function acceptParentRequest(form: FormData) {
+  await requireTeacher();
+  const found = await getParentRequest(field(form, "id"));
+  if (!found || found.status !== "pending") await go("/registrations");
+  const request = must(found);
+  const client = await ownedClient(request.client_id);
+  const parent = await connectParent({
+    name: request.name,
+    email: request.email,
+    phone: "",
+    social: "",
+    occupation: "",
+  });
+  if (!parent) await go("/registrations", { error: "emailTaken" });
+  await linkParent(client.id, must(parent).id);
+  await setParentRequestStatus(request.id, "accepted");
+  refresh();
+  await go(`/clients/${client.id}`);
+}
+
+export async function declineParentRequest(form: FormData) {
+  await requireTeacher();
+  const found = await getParentRequest(field(form, "id"));
+  if (found && found.status === "pending") {
+    await ownedClient(found.client_id);
+    await setParentRequestStatus(found.id, "declined");
+  }
   refresh();
   await go("/registrations");
 }
@@ -553,7 +655,7 @@ export async function archiveFeedback(form: FormData) {
   const kind = field(form, "kind") === "note" ? "note" : "request";
   const id = field(form, "id");
   if (!id) await go("/feedback");
-  setFeedbackArchived(kind, id, field(form, "archived") !== "0");
+  await setFeedbackArchived(kind, id, field(form, "archived") !== "0");
   refresh();
   const back = field(form, "back");
   if (back.startsWith("/clients/")) {
@@ -573,10 +675,10 @@ export async function saveSettings(form: FormData) {
   const phone = field(form, "phone");
   const currency = field(form, "currency") === "BGN" ? "BGN" : "EUR";
   if (!name || !isEmail(email)) await go("/settings", { error: "required" });
-  if (emailTaken(email, { role: "teacher", id: session.user_id })) {
+  if (await emailTaken(email, { role: "teacher", id: session.user_id })) {
     await go("/settings", { error: "emailTaken" });
   }
-  updateTeacher(session.user_id, { name, email, phone, currency });
+  await updateTeacher(session.user_id, { name, email, phone, currency });
   refresh();
   await go("/settings", { saved: "1" });
 }
@@ -585,8 +687,8 @@ export async function sendFeedbackRequest(form: FormData) {
   const session = await requireTeacher();
   const client = await ownedClient(field(form, "clientId"));
   const parentId = field(form, "parentId");
-  if (!parentLinkedTo(parentId, client.id)) await go(`/clients/${client.id}`, { error: "required" });
-  insertFeedbackRequest({
+  if (!(await parentLinkedTo(parentId, client.id))) await go(`/clients/${client.id}`, { error: "required" });
+  await insertFeedbackRequest({
     parentId,
     clientId: client.id,
     teacherId: session.user_id,
@@ -601,8 +703,8 @@ export async function addFeedbackNote(form: FormData) {
   const body = field(form, "body");
   const clientId = field(form, "clientId");
   if (!body) await go("/family/feedback", { error: "required" });
-  if (clientId && !parentLinkedTo(session.user_id, clientId)) await go("/family/feedback");
-  insertFeedbackNote(session.user_id, clientId || null, body);
+  if (clientId && !(await parentLinkedTo(session.user_id, clientId))) await go("/family/feedback");
+  await insertFeedbackNote(session.user_id, clientId || null, body);
   refresh();
   await go("/family/feedback", { saved: "1" });
 }
@@ -614,17 +716,17 @@ export async function addLessonFeedback(form: FormData) {
   const body = field(form, "body");
   const back = clientId ? `/family/${clientId}` : "/family";
   if (!body || !clientId || !lessonId) await go(back, { error: "required" });
-  if (!parentLinkedTo(session.user_id, clientId)) await go("/family");
-  const lesson = getLesson(lessonId);
+  if (!(await parentLinkedTo(session.user_id, clientId))) await go("/family");
+  const lesson = await getLesson(lessonId);
   if (!lesson || lesson.client_id !== clientId) await go(back);
-  insertFeedbackNote(session.user_id, clientId, body, must(lesson).id);
+  await insertFeedbackNote(session.user_id, clientId, body, must(lesson).id);
   refresh();
   await go(back, { saved: "1" });
 }
 
 export async function answerRequest(form: FormData) {
   const session = await requireParent();
-  const found = getFeedbackRequest(field(form, "requestId"));
+  const found = await getFeedbackRequest(field(form, "requestId"));
   if (!found || found.parent_id !== session.user_id || found.status !== "open") {
     await go("/family/feedback");
   }
@@ -637,7 +739,7 @@ export async function answerRequest(form: FormData) {
   if (scores.some((score) => !Number.isInteger(score) || score < 1 || score > 5)) {
     await go("/family/feedback", { error: "required" });
   }
-  answerFeedbackRequest(request.id, {
+  await answerFeedbackRequest(request.id, {
     pace,
     following,
     homework,

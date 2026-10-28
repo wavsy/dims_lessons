@@ -12,13 +12,13 @@ import { describeStats } from "@/lib/stats";
 
 export default async function FamilyPage() {
   const session = await requireSession("parent");
-  const teacher = getTeacher();
+  const teacher = await getTeacher();
   const locale = await getLocale();
   const t = await getTranslations("parent");
   const status = await getTranslations("status");
   const options = await choiceOptions();
-  const parent = getParentById(session.user_id);
-  const children = listClientsOfParent(session.user_id);
+  const parent = await getParentById(session.user_id);
+  const children = await listClientsOfParent(session.user_id);
   const money = (cents: number) => formatMoney(cents, teacher?.currency ?? "EUR", locale);
   const phone = teacher?.phone?.trim() ?? "";
 

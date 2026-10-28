@@ -1,9 +1,7 @@
+import "server-only";
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { TEACHER_EMAIL } from "./constants";
-import { demoAccount } from "./demo-accounts";
+import { createAdminClient } from "./supabase/admin";
+import { createClient } from "./supabase/server";
 import { summarize, type Stats } from "./stats";
 
 export type Role = "teacher" | "parent" | "student";
@@ -44,11 +42,10 @@ export type Client = {
   interests: string;
   ambitions: string;
   status: string;
-  student_email: string | null;
   public_code: string;
   portrait: string;
-  student_pin_hash: string | null;
-  student_pin_salt: string | null;
+  pays_self: number;
+  pin_set: boolean;
   created_at: string;
 };
 
@@ -129,743 +126,296 @@ export type FeedbackRequest = {
   client_name?: string | null;
 };
 
-type SqlValue = string | number | null;
+export type ParentRequest = {
+  id: string;
+  client_id: string;
+  name: string;
+  email: string;
+  status: string;
+  created_at: string;
+  client_name: string;
+};
 
-const globalForDb = globalThis as unknown as { lessonsDb?: DatabaseSync };
-let studioReady = false;
+export type StudentView = {
+  client: { id: string; name: string; public_code: string; teacher_id: string };
+  lessons: Lesson[];
+  teacher: Teacher | null;
+};
 
-function openDatabase() {
-  const dir = path.join(process.cwd(), "data");
-  fs.mkdirSync(dir, { recursive: true });
-  const db = new DatabaseSync(path.join(dir, "lessons.db"));
-  db.exec("PRAGMA foreign_keys = ON");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS teachers (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      phone TEXT NOT NULL DEFAULT '',
-      currency TEXT NOT NULL DEFAULT 'EUR',
-      locale TEXT NOT NULL DEFAULT 'en',
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS parents (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      phone TEXT NOT NULL DEFAULT '',
-      social TEXT NOT NULL DEFAULT '',
-      occupation TEXT NOT NULL DEFAULT '',
-      locale TEXT NOT NULL DEFAULT 'en',
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS clients (
-      id TEXT PRIMARY KEY,
-      teacher_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      kind TEXT NOT NULL DEFAULT 'student',
-      subject_default TEXT NOT NULL DEFAULT 'math',
-      platform_default TEXT NOT NULL DEFAULT 'paper',
-      location_default TEXT NOT NULL DEFAULT 'in_person',
-      price_cents INTEGER NOT NULL DEFAULT 0,
-      billing_mode TEXT NOT NULL DEFAULT 'per_lesson',
-      school TEXT NOT NULL DEFAULT '',
-      grade TEXT NOT NULL DEFAULT '',
-      interests TEXT NOT NULL DEFAULT '',
-      ambitions TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'active',
-      student_pin_hash TEXT,
-      student_pin_salt TEXT,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (teacher_id) REFERENCES teachers(id)
-    );
-    CREATE TABLE IF NOT EXISTS client_parents (
-      client_id TEXT NOT NULL,
-      parent_id TEXT NOT NULL,
-      PRIMARY KEY (client_id, parent_id),
-      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
-      FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS lessons (
-      id TEXT PRIMARY KEY,
-      client_id TEXT NOT NULL,
-      occurred_on TEXT NOT NULL,
-      subject TEXT NOT NULL,
-      platform TEXT NOT NULL,
-      location TEXT NOT NULL,
-      materials TEXT NOT NULL DEFAULT '',
-      homework TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS payments (
-      id TEXT PRIMARY KEY,
-      client_id TEXT NOT NULL,
-      paid_on TEXT NOT NULL,
-      amount_cents INTEGER NOT NULL,
-      lessons_added INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS registrations (
-      id TEXT PRIMARY KEY,
-      parent_name TEXT NOT NULL,
-      parent_email TEXT NOT NULL,
-      parent_phone TEXT NOT NULL DEFAULT '',
-      parent_social TEXT NOT NULL DEFAULT '',
-      parent_occupation TEXT NOT NULL DEFAULT '',
-      child_name TEXT NOT NULL,
-      school TEXT NOT NULL DEFAULT '',
-      grade TEXT NOT NULL DEFAULT '',
-      interests TEXT NOT NULL DEFAULT '',
-      ambitions TEXT NOT NULL DEFAULT '',
-      subject TEXT NOT NULL DEFAULT 'math',
-      status TEXT NOT NULL DEFAULT 'pending',
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS feedback_notes (
-      id TEXT PRIMARY KEY,
-      parent_id TEXT NOT NULL,
-      client_id TEXT,
-      body TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS feedback_requests (
-      id TEXT PRIMARY KEY,
-      parent_id TEXT NOT NULL,
-      client_id TEXT,
-      teacher_id TEXT NOT NULL,
-      open_question TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'open',
-      pace INTEGER,
-      following_score INTEGER,
-      homework_score INTEGER,
-      overall INTEGER,
-      open_answer TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL,
-      answered_at TEXT,
-      FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE CASCADE,
-      FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS magic_links (
-      token TEXT PRIMARY KEY,
-      email TEXT NOT NULL,
-      role TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      locale TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      used_at TEXT
-    );
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      role TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL
-    );
-  `);
-
-  const teachers = db.prepare("SELECT COUNT(*) AS n FROM teachers").get() as { n: number };
-  if (!teachers.n) {
-    const now = new Date().toISOString();
-    db.prepare(
-      `INSERT INTO teachers (id, name, email, phone, currency, locale, created_at)
-       VALUES (?, 'Dimitar', ?, '', 'EUR', 'en', ?)`,
-    ).run(cryptoId(), TEACHER_EMAIL, now);
-  }
-
-  return db;
-}
-
-export function getDb() {
-  if (!globalForDb.lessonsDb) globalForDb.lessonsDb = openDatabase();
-  if (!studioReady) {
-    studioReady = true;
-    try {
-      ensureStudio();
-    } catch (error) {
-      studioReady = false;
-      throw error;
-    }
-  }
-  return globalForDb.lessonsDb;
-}
-
-function one<T>(sql: string, ...params: SqlValue[]): T | undefined {
-  return getDb().prepare(sql).get(...params) as T | undefined;
-}
-
-function many<T>(sql: string, ...params: SqlValue[]): T[] {
-  return getDb().prepare(sql).all(...params) as T[];
-}
-
-function run(sql: string, ...params: SqlValue[]) {
-  getDb().prepare(sql).run(...params);
-}
-
-function hashPassword(password: string) {
-  const salt = randomBytes(16).toString("hex");
-  const hash = scryptSync(password, salt, 32).toString("hex");
-  return { salt, hash };
-}
-
-function passwordMatches(password: string, hash: string | null, salt: string | null) {
-  if (!password || !hash || !salt) return false;
-  const next = scryptSync(password, salt, 32);
-  const prev = Buffer.from(hash, "hex");
-  if (next.length !== prev.length) return false;
-  return timingSafeEqual(next, prev);
-}
-
-function setPasswordIfEmpty(table: "teachers" | "parents" | "clients", id: string, password: string) {
-  const row = one<{ password_hash: string | null }>(`SELECT password_hash FROM ${table} WHERE id = ?`, id);
-  if (row?.password_hash) return;
-  const { hash, salt } = hashPassword(password);
-  run(`UPDATE ${table} SET password_hash = ?, password_salt = ? WHERE id = ?`, hash, salt, id);
-}
-
-function daysAgo(count: number) {
-  const now = new Date();
-  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-  local.setUTCDate(local.getUTCDate() - count);
-  return local.toISOString().slice(0, 10);
-}
-
-function clientByName(teacherId: string, name: string) {
-  return one<Client>(
-    "SELECT * FROM clients WHERE teacher_id = ? AND lower(name) = lower(?) ORDER BY created_at ASC",
-    teacherId,
-    name,
-  );
-}
-
-function codeTaken(code: string) {
-  return Boolean(
-    one("SELECT 1 AS ok FROM teachers WHERE public_code = ?", code) ||
-      one("SELECT 1 AS ok FROM parents WHERE public_code = ?", code) ||
-      one("SELECT 1 AS ok FROM clients WHERE public_code = ?", code),
-  );
-}
-
-function mintCode() {
-  let code = "";
-  do {
-    code = String(Math.floor(Math.random() * 1000000)).padStart(6, "0");
-  } while (code === "000000" || codeTaken(code));
-  return code;
-}
-
-function fillPublicCodes() {
-  for (const table of ["teachers", "parents", "clients"] as const) {
-    const rows = many<{ id: string; public_code: string | null }>(`SELECT id, public_code FROM ${table}`);
-    for (const row of rows) {
-      if (row.public_code) continue;
-      run(`UPDATE ${table} SET public_code = ? WHERE id = ?`, mintCode(), row.id);
-    }
-  }
-}
-
-export function getParentByCode(code: string) {
-  return one<Parent>(
-    "SELECT id, name, email, phone, social, occupation, locale, public_code FROM parents WHERE public_code = ?",
-    code,
-  );
-}
-
-export function markPaysForSelf(clientId: string) {
-  const client = one<Client>("SELECT * FROM clients WHERE id = ?", clientId);
-  if (!client?.public_code) return;
-  let parent = getParentByCode(client.public_code);
-  if (!parent) {
-    const email = `self.${client.public_code}@lessons.local`;
-    parent = upsertParent({
-      name: client.name,
-      email,
-      phone: "",
-      social: "",
-      occupation: "",
-      publicCode: client.public_code,
-    });
-  }
-  linkParent(client.id, parent.id);
-}
-
-function ensureColumn(table: string, column: string, type: string) {
-  const db = globalForDb.lessonsDb;
-  if (!db) return;
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (!columns.some((item) => item.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-  }
-}
-
-function fillLessons(
-  clientId: string,
-  rows: { days: number; subject: string; materials: string; homework: string; location?: string }[],
-) {
-  if (listLessons(clientId).length > 0) return;
-  for (const row of rows) {
-    insertLesson({
-      clientId,
-      occurredOn: daysAgo(row.days),
-      subject: row.subject,
-      platform: "paper",
-      location: row.location ?? "in_person",
-      materials: row.materials,
-      homework: row.homework,
-    });
-  }
-}
-
-function ensureStudio() {
-  ensureColumn("teachers", "public_code", "TEXT");
-  ensureColumn("parents", "public_code", "TEXT");
-  ensureColumn("clients", "public_code", "TEXT");
-  ensureColumn("lessons", "duration_hours", "REAL NOT NULL DEFAULT 1");
-  ensureColumn("registrations", "portrait", "TEXT NOT NULL DEFAULT 'girl'");
-  ensureColumn("feedback_notes", "archived", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumn("feedback_notes", "lesson_id", "TEXT");
-  ensureColumn("feedback_requests", "archived", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumn("teachers", "password_hash", "TEXT");
-  ensureColumn("teachers", "password_salt", "TEXT");
-  ensureColumn("parents", "password_hash", "TEXT");
-  ensureColumn("parents", "password_salt", "TEXT");
-  ensureColumn("clients", "portrait", "TEXT NOT NULL DEFAULT 'girl'");
-  ensureColumn("payments", "hours_added", "REAL NOT NULL DEFAULT 0");
-  ensureColumn("clients", "student_email", "TEXT");
-  ensureColumn("clients", "password_hash", "TEXT");
-  ensureColumn("clients", "password_salt", "TEXT");
-  ensureColumn("registrations", "pays_self", "INTEGER NOT NULL DEFAULT 0");
-  globalForDb.lessonsDb?.exec(`
-    UPDATE clients SET kind = 'student' WHERE kind = 'child';
-    UPDATE clients SET kind = 'parent' WHERE kind = 'adult';
-  `);
-  globalForDb.lessonsDb?.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS clients_student_email ON clients(student_email) WHERE student_email IS NOT NULL AND student_email != '';
-    CREATE UNIQUE INDEX IF NOT EXISTS teachers_public_code ON teachers(public_code) WHERE public_code IS NOT NULL AND public_code != '';
-    CREATE UNIQUE INDEX IF NOT EXISTS parents_public_code ON parents(public_code) WHERE public_code IS NOT NULL AND public_code != '';
-    CREATE UNIQUE INDEX IF NOT EXISTS clients_public_code ON clients(public_code) WHERE public_code IS NOT NULL AND public_code != '';
-  `);
-  fillPublicCodes();
-
-  const teacherAccount = demoAccount("teacher");
-  const teacher = getTeacherByEmail(teacherAccount.email) ?? getTeacher();
-  if (!teacher) return;
-  if (!teacher.phone.trim()) {
-    run("UPDATE teachers SET phone = ? WHERE id = ?", "+359 88 123 4567", teacher.id);
-  }
-  setPasswordIfEmpty("teachers", teacher.id, teacherAccount.password);
-
-  const parentAccount = demoAccount("parent");
-  const parent = upsertParent({
-    name: parentAccount.name,
-    email: parentAccount.email,
-    phone: "+359 88 555 0101",
-    social: "",
-    occupation: "Architect",
-  });
-  setPasswordIfEmpty("parents", parent.id, parentAccount.password);
-
-  const studentAccount = demoAccount("student");
-  let boris = one<Client>("SELECT * FROM clients WHERE lower(student_email) = ?", studentAccount.email);
-  if (!boris) boris = clientByName(teacher.id, studentAccount.name);
-  if (!boris) {
-    const id = insertClient({
-      teacherId: teacher.id,
-      name: studentAccount.name,
-      kind: "student",
-      subject: "math",
-      platform: "paper",
-      location: "in_person",
-      priceCents: 2500,
-      billingMode: "prepaid",
-      school: "125 SU",
-      grade: "7",
-      interests: "Chess and football",
-      ambitions: "Wants to study architecture",
-    });
-    boris = getClient(id);
-  }
-  if (boris) {
-    run(
-      `UPDATE clients SET
-         student_email = ?,
-         billing_mode = 'prepaid',
-         price_cents = CASE WHEN price_cents = 0 THEN 2500 ELSE price_cents END,
-         school = CASE WHEN school = '' THEN '125 SU' ELSE school END,
-         grade = CASE WHEN grade = '' THEN '7' ELSE grade END,
-         interests = CASE WHEN interests = '' THEN 'Chess and football' ELSE interests END,
-         ambitions = CASE WHEN ambitions = '' THEN 'Wants to study architecture' ELSE ambitions END
-       WHERE id = ?`,
-      studentAccount.email,
-      boris.id,
-    );
-    setPasswordIfEmpty("clients", boris.id, studentAccount.password);
-    linkParent(boris.id, parent.id);
-    fillLessons(boris.id, [
-      {
-        days: 12,
-        subject: "math",
-        materials: "Fractions with the same denominator",
-        homework: "Page 12, exercises 1–4",
-      },
-      {
-        days: 5,
-        subject: "math",
-        materials: "Equations with one unknown",
-        homework: "Finish the three examples we started",
-      },
-    ]);
-    const added = one<{ n: number }>(
-      "SELECT COALESCE(SUM(lessons_added), 0) AS n FROM payments WHERE client_id = ?",
-      boris.id,
-    );
-    if (!added?.n) {
-      insertPayment({ clientId: boris.id, paidOn: daysAgo(14), amountCents: 10000, lessonsAdded: 4 });
-    }
-  }
-
-  let anna = clientByName(teacher.id, "Anna");
-  if (!anna) {
-    const id = insertClient({
-      teacherId: teacher.id,
-      name: "Anna",
-      kind: "student",
-      subject: "english",
-      platform: "notes",
-      location: "online",
-      priceCents: 2000,
-      billingMode: "prepaid",
-      school: "32 SU",
-      grade: "5",
-      interests: "Stories and drawing",
-      ambitions: "",
-    });
-    anna = getClient(id);
-  }
-  if (anna) {
-    fillLessons(anna.id, [
-      { days: 9, subject: "english", materials: "Past simple in a short story", homework: "Write six sentences about yesterday", location: "online" },
-      { days: 4, subject: "english", materials: "Reading: a page from the book", homework: "Read the next page aloud", location: "online" },
-      { days: 1, subject: "english", materials: "Questions with did", homework: "", location: "online" },
-    ]);
-    const added = one<{ n: number }>(
-      "SELECT COALESCE(SUM(lessons_added), 0) AS n FROM payments WHERE client_id = ?",
-      anna.id,
-    );
-    if (!added?.n) {
-      insertPayment({ clientId: anna.id, paidOn: daysAgo(20), amountCents: 8000, lessonsAdded: 4 });
-    }
-  }
-
-  let elena = clientByName(teacher.id, "Elena");
-  if (!elena) {
-    const id = insertClient({
-      teacherId: teacher.id,
-      name: "Elena",
-      kind: "parent",
-      subject: "math",
-      platform: "paper",
-      location: "in_person",
-      priceCents: 3000,
-      billingMode: "per_lesson",
-      school: "",
-      grade: "",
-      interests: "Going back to university maths",
-      ambitions: "",
-    });
-    elena = getClient(id);
-  }
-  if (elena) {
-    fillLessons(elena.id, [
-      { days: 8, subject: "math", materials: "Percentages in everyday prices", homework: "The three shop problems" },
-      { days: 2, subject: "math", materials: "Linear functions", homework: "Sketch the two graphs" },
-    ]);
-  }
-
-  if (listNotesForParent(parent.id).length === 0) {
-    insertFeedbackNote(parent.id, boris?.id ?? null, "Boris is enjoying the lessons. The pace feels right.");
-  }
-  const requests = listRequestsForParent(parent.id);
-  if (boris && !requests.some((item) => item.status === "answered")) {
-    insertFeedbackRequest({
-      parentId: parent.id,
-      clientId: boris.id,
-      teacherId: teacher.id,
-      openQuestion: "What should I change?",
-    });
-    const created = listRequestsForParent(parent.id).find((item) => item.status === "open");
-    if (created) {
-      answerFeedbackRequest(created.id, {
-        pace: 4,
-        following: 5,
-        homework: 4,
-        overall: 5,
-        openAnswer: "A bit more practice problems, please.",
-      });
-    }
-  }
-  if (boris && !listRequestsForParent(parent.id).some((item) => item.status === "open")) {
-    insertFeedbackRequest({
-      parentId: parent.id,
-      clientId: boris.id,
-      teacherId: teacher.id,
-      openQuestion: "What should I change?",
-    });
-  }
-
-  const signupEmail = "lina@example.com";
-  if (!one("SELECT 1 AS ok FROM registrations WHERE parent_email = ?", signupEmail)) {
-    insertRegistration({
-      parent_name: "Lina Kovacheva",
-      parent_email: signupEmail,
-      parent_phone: "+359 88 200 3344",
-      parent_social: "",
-      parent_occupation: "Designer",
-      child_name: "Mila",
-      school: "18 SU",
-      grade: "4",
-      interests: "Puzzles",
-      ambitions: "",
-      subject: "math",
-      portrait: "girl",
-      pays_self: 0,
-    });
-  }
-
-  if (elena) markPaysForSelf(elena.id);
-}
-
-type PasswordRow = { id: string; password_hash: string | null; password_salt: string | null };
-
-export function authenticate(email: string, password: string): { role: Role; userId: string } | undefined {
-  const normalized = email.trim().toLowerCase();
-  if (!normalized || !password) return undefined;
-
-  const teacher = one<PasswordRow>(
-    "SELECT id, password_hash, password_salt FROM teachers WHERE email = ?",
-    normalized,
-  );
-  if (teacher && passwordMatches(password, teacher.password_hash, teacher.password_salt)) {
-    return { role: "teacher", userId: teacher.id };
-  }
-
-  const parent = one<PasswordRow>(
-    "SELECT id, password_hash, password_salt FROM parents WHERE email = ?",
-    normalized,
-  );
-  if (parent && passwordMatches(password, parent.password_hash, parent.password_salt)) {
-    return { role: "parent", userId: parent.id };
-  }
-
-  const student = one<PasswordRow>(
-    "SELECT id, password_hash, password_salt FROM clients WHERE lower(student_email) = ? AND status = 'active'",
-    normalized,
-  );
-  if (student && passwordMatches(password, student.password_hash, student.password_salt)) {
-    return { role: "student", userId: student.id };
-  }
-
-  return undefined;
-}
-
-export function cryptoId() {
-  return randomBytes(16).toString("hex");
-}
-
-export function nowIso() {
-  return new Date().toISOString();
-}
-
-export function transaction(fn: () => void) {
-  const db = getDb();
-  db.exec("BEGIN");
-  try {
-    fn();
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
-function withStats(client: Client): ClientCard {
-  const lessons = one<{ n: number }>("SELECT COUNT(*) AS n FROM lessons WHERE client_id = ?", client.id);
-  const payments = one<{ amount: number; added: number; hours: number }>(
-    `SELECT COALESCE(SUM(amount_cents), 0) AS amount,
-            COALESCE(SUM(lessons_added), 0) AS added,
-            COALESCE(SUM(hours_added), 0) AS hours
-     FROM payments WHERE client_id = ?`,
-    client.id,
-  );
-  return {
-    ...client,
-    stats: summarize(
-      client.billing_mode,
-      client.price_cents,
-      lessons?.n ?? 0,
-      payments?.amount ?? 0,
-      payments?.added ?? 0,
-      one<{ n: number }>("SELECT COALESCE(SUM(duration_hours), 0) AS n FROM lessons WHERE client_id = ?", client.id)?.n ?? 0,
-      payments?.hours ?? 0,
-    ),
-  };
-}
-
-export function getTeacher() {
-  return one<Teacher>("SELECT id, name, email, phone, currency, locale, public_code FROM teachers LIMIT 1");
-}
-
-export function getTeacherById(id: string) {
-  return one<Teacher>("SELECT id, name, email, phone, currency, locale, public_code FROM teachers WHERE id = ?", id);
-}
-
-export function getTeacherByEmail(email: string) {
-  return one<Teacher>(
-    "SELECT id, name, email, phone, currency, locale, public_code FROM teachers WHERE email = ?",
-    email,
-  );
-}
-
-export function updateTeacher(id: string, input: Pick<Teacher, "name" | "email" | "phone" | "currency">) {
-  run(
-    "UPDATE teachers SET name = ?, email = ?, phone = ?, currency = ? WHERE id = ?",
-    input.name,
-    input.email,
-    input.phone,
-    input.currency,
-    id,
-  );
-}
-
-export function updateTeacherLocale(id: string, locale: string) {
-  run("UPDATE teachers SET locale = ? WHERE id = ?", locale, id);
-}
-
-export function getParentById(id: string) {
-  return one<Parent>(
-    "SELECT id, name, email, phone, social, occupation, locale, public_code FROM parents WHERE id = ?",
-    id,
-  );
-}
-
-export function getParentByEmail(email: string) {
-  return one<Parent>(
-    "SELECT id, name, email, phone, social, occupation, locale, public_code FROM parents WHERE email = ?",
-    email,
-  );
-}
-
-export function updateParentLocale(id: string, locale: string) {
-  run("UPDATE parents SET locale = ? WHERE id = ?", locale, id);
-}
-
-export function emailTaken(email: string, except?: { role: "teacher" | "parent"; id: string }) {
-  const teacher = getTeacherByEmail(email);
-  if (teacher && !(except?.role === "teacher" && except.id === teacher.id)) return true;
-  const parent = getParentByEmail(email);
-  if (parent && !(except?.role === "parent" && except.id === parent.id)) return true;
-  const student = one<{ id: string }>(
-    "SELECT id FROM clients WHERE lower(student_email) = ? AND status = 'active'",
-    email,
-  );
-  return Boolean(student);
-}
-
-export function upsertParent(input: {
+type ProfileRow = {
+  id: string;
+  role: "teacher" | "parent";
   name: string;
   email: string;
   phone: string;
   social: string;
   occupation: string;
-  publicCode?: string;
-}) {
-  const existing = getParentByEmail(input.email);
-  if (existing) {
-    run(
-      `UPDATE parents
-       SET name = CASE WHEN ? != '' THEN ? ELSE name END,
-           phone = CASE WHEN ? != '' THEN ? ELSE phone END,
-           social = CASE WHEN ? != '' THEN ? ELSE social END,
-           occupation = CASE WHEN ? != '' THEN ? ELSE occupation END
-       WHERE id = ?`,
-      input.name,
-      input.name,
-      input.phone,
-      input.phone,
-      input.social,
-      input.social,
-      input.occupation,
-      input.occupation,
-      existing.id,
-    );
-    return getParentById(existing.id)!;
+  currency: string;
+  locale: string;
+  public_code: string | null;
+  created_at: string;
+};
+
+type ClientRow = Omit<Client, "pays_self" | "pin_set" | "public_code"> & {
+  public_code: string | null;
+  pays_self: boolean;
+};
+
+type AccessError = "unknownCode" | "emailTaken" | "required";
+
+const noteSelect =
+  "id, parent_id, client_id, lesson_id, body, created_at, archived, parent:profiles!feedback_notes_parent_id_fkey(name), client:clients(name), lesson:lessons!feedback_notes_lesson_id_fkey(occurred_on, subject)";
+
+const requestSelect =
+  "id, parent_id, client_id, teacher_id, open_question, status, pace, following_score, homework_score, overall, open_answer, created_at, answered_at, archived, parent:profiles!feedback_requests_parent_id_fkey(name), client:clients(name)";
+
+function raise(error: { message: string } | null) {
+  if (error) throw new Error(error.message);
+}
+
+export function accessError(error: { message: string } | null): AccessError | null {
+  if (!error) return null;
+  if (error.message.includes("unknown_code")) return "unknownCode";
+  if (error.message.includes("email_taken")) return "emailTaken";
+  if (error.message.includes("invalid")) return "required";
+  return null;
+}
+
+function oneRel<T>(value: T | T[] | null | undefined): T | null {
+  if (!value) return null;
+  return Array.isArray(value) ? (value[0] ?? null) : value;
+}
+
+function asTeacher(row: ProfileRow): Teacher {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    phone: row.phone ?? "",
+    currency: row.currency || "EUR",
+    locale: row.locale || "en",
+    public_code: row.public_code ?? "",
+  };
+}
+
+function asParent(row: ProfileRow): Parent {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    phone: row.phone ?? "",
+    social: row.social ?? "",
+    occupation: row.occupation ?? "",
+    locale: row.locale || "en",
+    public_code: row.public_code ?? "",
+  };
+}
+
+function asClient(row: ClientRow, pinSet = false): Client {
+  return {
+    ...row,
+    public_code: row.public_code ?? "",
+    price_cents: Number(row.price_cents),
+    pays_self: row.pays_self ? 1 : 0,
+    pin_set: pinSet,
+  };
+}
+
+function asLesson(row: Lesson): Lesson {
+  return { ...row, duration_hours: Number(row.duration_hours) || 1 };
+}
+
+function asPayment(row: Payment): Payment {
+  return {
+    ...row,
+    amount_cents: Number(row.amount_cents),
+    lessons_added: Number(row.lessons_added),
+    hours_added: Number(row.hours_added) || 0,
+  };
+}
+
+async function userDb() {
+  return createClient();
+}
+
+export async function mintPublicCode() {
+  const admin = createAdminClient();
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const code = String(Math.floor(Math.random() * 1000000)).padStart(6, "0");
+    if (code === "000000") continue;
+    const [{ count: profiles }, { count: clients }] = await Promise.all([
+      admin.from("profiles").select("id", { count: "exact", head: true }).eq("public_code", code),
+      admin.from("clients").select("id", { count: "exact", head: true }).eq("public_code", code),
+    ]);
+    if (!profiles && !clients) return code;
   }
-
-  const id = cryptoId();
-  run(
-    `INSERT INTO parents (id, name, email, phone, social, occupation, locale, public_code, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'en', ?, ?)`,
-    id,
-    input.name || input.email,
-    input.email,
-    input.phone,
-    input.social,
-    input.occupation,
-    input.publicCode || mintCode(),
-    nowIso(),
-  );
-  return getParentById(id)!;
+  throw new Error("Could not mint a code");
 }
 
-export function linkParent(clientId: string, parentId: string) {
-  run("INSERT OR IGNORE INTO client_parents (client_id, parent_id) VALUES (?, ?)", clientId, parentId);
+async function hasPin(clientId: string) {
+  const admin = createAdminClient();
+  const { data, error } = await admin.from("student_pins").select("client_id").eq("client_id", clientId).maybeSingle();
+  raise(error);
+  return Boolean(data);
 }
 
-export function unlinkParent(clientId: string, parentId: string) {
-  run("DELETE FROM client_parents WHERE client_id = ? AND parent_id = ?", clientId, parentId);
-}
-
-export function parentLinkedTo(parentId: string, clientId: string) {
-  return Boolean(
-    one(
-      "SELECT 1 AS ok FROM client_parents WHERE parent_id = ? AND client_id = ?",
-      parentId,
-      clientId,
-    ),
-  );
-}
-
-export function listClients(teacherId: string, status: "active" | "archived" = "active") {
-  return many<Client>(
-    "SELECT * FROM clients WHERE teacher_id = ? AND status = ? ORDER BY name COLLATE NOCASE",
-    teacherId,
-    status,
-  ).map(withStats);
-}
-
-export function setClientStatus(id: string, status: "active" | "archived") {
-  run("UPDATE clients SET status = ? WHERE id = ?", status, id);
-}
-
-export function deleteClient(id: string) {
-  transaction(() => {
-    run("DELETE FROM lessons WHERE client_id = ?", id);
-    run("DELETE FROM payments WHERE client_id = ?", id);
-    run("DELETE FROM client_parents WHERE client_id = ?", id);
-    run("DELETE FROM feedback_notes WHERE client_id = ?", id);
-    run("DELETE FROM feedback_requests WHERE client_id = ?", id);
-    run("DELETE FROM clients WHERE id = ?", id);
+async function withStats(clients: Client[]): Promise<ClientCard[]> {
+  if (!clients.length) return [];
+  const db = await userDb();
+  const ids = clients.map((client) => client.id);
+  const [{ data: lessons, error: lessonError }, { data: payments, error: paymentError }] = await Promise.all([
+    db.from("lessons").select("client_id, duration_hours").in("client_id", ids),
+    db.from("payments").select("client_id, amount_cents, lessons_added, hours_added").in("client_id", ids),
+  ]);
+  raise(lessonError);
+  raise(paymentError);
+  return clients.map((client) => {
+    const ownLessons = (lessons ?? []).filter((row) => row.client_id === client.id);
+    const ownPayments = (payments ?? []).filter((row) => row.client_id === client.id);
+    return {
+      ...client,
+      stats: summarize(
+        client.billing_mode,
+        client.price_cents,
+        ownLessons.length,
+        ownPayments.reduce((sum, row) => sum + Number(row.amount_cents || 0), 0),
+        ownPayments.reduce((sum, row) => sum + Number(row.lessons_added || 0), 0),
+        ownLessons.reduce((sum, row) => sum + Number(row.duration_hours || 0), 0),
+        ownPayments.reduce((sum, row) => sum + Number(row.hours_added || 0), 0),
+      ),
+    };
   });
 }
 
-export function getClient(id: string) {
-  const client = one<Client>("SELECT * FROM clients WHERE id = ?", id);
-  return client ? withStats(client) : undefined;
+export async function getProfileRow(id: string) {
+  const admin = createAdminClient();
+  const { data, error } = await admin.from("profiles").select("*").eq("id", id).maybeSingle();
+  raise(error);
+  return (data as ProfileRow | null) ?? undefined;
 }
 
-export function insertClient(input: {
+export async function getTeacher() {
+  const db = await userDb();
+  const { data, error } = await db.from("profiles").select("*").eq("role", "teacher").limit(1);
+  raise(error);
+  const row = (data?.[0] ?? null) as ProfileRow | null;
+  return row ? asTeacher(row) : undefined;
+}
+
+export async function getTeacherById(id: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("profiles").select("*").eq("id", id).eq("role", "teacher").maybeSingle();
+  raise(error);
+  return data ? asTeacher(data as ProfileRow) : undefined;
+}
+
+export async function getTeacherByEmail(email: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("profiles").select("*").eq("role", "teacher").eq("email", email.trim().toLowerCase()).maybeSingle();
+  raise(error);
+  return data ? asTeacher(data as ProfileRow) : undefined;
+}
+
+export async function updateTeacher(id: string, input: Pick<Teacher, "name" | "email" | "phone" | "currency">) {
+  const admin = createAdminClient();
+  const { error: authError } = await admin.auth.admin.updateUserById(id, {
+    email: input.email,
+    email_confirm: true,
+  });
+  if (authError) throw new Error(authError.message);
+  const db = await userDb();
+  const { error } = await db
+    .from("profiles")
+    .update({ name: input.name, email: input.email, phone: input.phone, currency: input.currency })
+    .eq("id", id);
+  raise(error);
+}
+
+export async function updateTeacherLocale(id: string, locale: string) {
+  const db = await userDb();
+  const { error } = await db.from("profiles").update({ locale }).eq("id", id);
+  raise(error);
+}
+
+export async function getParentById(id: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("profiles").select("*").eq("id", id).eq("role", "parent").maybeSingle();
+  raise(error);
+  return data ? asParent(data as ProfileRow) : undefined;
+}
+
+export async function getParentByCode(code: string) {
+  const admin = createAdminClient();
+  const { data, error } = await admin.from("profiles").select("*").eq("role", "parent").eq("public_code", code).maybeSingle();
+  raise(error);
+  return data ? asParent(data as ProfileRow) : undefined;
+}
+
+export async function updateParentLocale(id: string, locale: string) {
+  const db = await userDb();
+  const { error } = await db.from("profiles").update({ locale }).eq("id", id);
+  raise(error);
+}
+
+export async function emailTaken(email: string, except?: { role: "teacher" | "parent"; id: string }) {
+  const admin = createAdminClient();
+  const { data, error } = await admin.from("profiles").select("id").eq("email", email.trim().toLowerCase()).maybeSingle();
+  raise(error);
+  if (!data) return false;
+  return !(except && except.id === data.id);
+}
+
+export async function linkParent(clientId: string, parentId: string) {
+  const db = await userDb();
+  const { error } = await db.from("client_parents").upsert(
+    { client_id: clientId, parent_id: parentId },
+    { onConflict: "client_id,parent_id", ignoreDuplicates: true },
+  );
+  raise(error);
+}
+
+export async function unlinkParent(clientId: string, parentId: string) {
+  const db = await userDb();
+  const { error } = await db.from("client_parents").delete().eq("client_id", clientId).eq("parent_id", parentId);
+  raise(error);
+}
+
+export async function parentLinkedTo(parentId: string, clientId: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("client_parents").select("client_id").eq("parent_id", parentId).eq("client_id", clientId).maybeSingle();
+  raise(error);
+  return Boolean(data);
+}
+
+export async function listClients(teacherId: string, status: "active" | "archived" = "active") {
+  const db = await userDb();
+  const { data, error } = await db.from("clients").select("*").eq("teacher_id", teacherId).eq("status", status).order("name");
+  raise(error);
+  return withStats((data ?? []).map((row) => asClient(row as ClientRow)));
+}
+
+export async function setClientStatus(id: string, status: "active" | "archived") {
+  const db = await userDb();
+  const { error } = await db.from("clients").update({ status }).eq("id", id);
+  raise(error);
+}
+
+export async function deleteClient(id: string) {
+  const db = await userDb();
+  const { error } = await db.from("clients").delete().eq("id", id);
+  raise(error);
+}
+
+export async function getClient(id: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("clients").select("*").eq("id", id).maybeSingle();
+  raise(error);
+  if (!data) return undefined;
+  const [card] = await withStats([asClient(data as ClientRow, await hasPin(id))]);
+  return card;
+}
+
+export async function insertClient(input: {
   teacherId: string;
   name: string;
   kind: string;
@@ -879,38 +429,43 @@ export function insertClient(input: {
   interests: string;
   ambitions: string;
   portrait?: string;
+  paysSelf?: boolean;
 }) {
-  const id = cryptoId();
-  run(
-    `INSERT INTO clients (
-      id, teacher_id, name, kind, subject_default, platform_default, location_default,
-      price_cents, billing_mode, school, grade, interests, ambitions, status, public_code, portrait, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
-    id,
-    input.teacherId,
-    input.name,
-    input.kind,
-    input.subject,
-    input.platform,
-    input.location,
-    input.priceCents,
-    input.billingMode,
-    input.school,
-    input.grade,
-    input.interests,
-    input.ambitions,
-    mintCode(),
-    input.portrait === "boy" ? "boy" : "girl",
-    nowIso(),
-  );
-  return id;
+  const db = await userDb();
+  const { data, error } = await db
+    .from("clients")
+    .insert({
+      teacher_id: input.teacherId,
+      name: input.name,
+      kind: input.kind,
+      subject_default: input.subject,
+      platform_default: input.platform,
+      location_default: input.location,
+      price_cents: input.priceCents,
+      billing_mode: input.billingMode,
+      school: input.school,
+      grade: input.grade,
+      interests: input.interests,
+      ambitions: input.ambitions,
+      status: "active",
+      public_code: await mintPublicCode(),
+      portrait: input.portrait === "boy" ? "boy" : "girl",
+      pays_self: Boolean(input.paysSelf),
+    })
+    .select("id")
+    .single();
+  raise(error);
+  if (!data) throw new Error("Could not save the student.");
+  return data.id as string;
 }
 
-export function setClientDeal(id: string, priceCents: number, billingMode: string) {
-  run("UPDATE clients SET price_cents = ?, billing_mode = ? WHERE id = ?", priceCents, billingMode, id);
+export async function setClientDeal(id: string, priceCents: number, billingMode: string) {
+  const db = await userDb();
+  const { error } = await db.from("clients").update({ price_cents: priceCents, billing_mode: billingMode }).eq("id", id);
+  raise(error);
 }
 
-export function updateClient(
+export async function updateClient(
   id: string,
   input: {
     name: string;
@@ -927,77 +482,150 @@ export function updateClient(
     portrait: string;
   },
 ) {
-  run(
-    `UPDATE clients SET
-      name = ?, kind = ?, subject_default = ?, platform_default = ?, location_default = ?,
-      price_cents = ?, billing_mode = ?, school = ?, grade = ?, interests = ?, ambitions = ?, portrait = ?
-     WHERE id = ?`,
-    input.name,
-    input.kind,
-    input.subject,
-    input.platform,
-    input.location,
-    input.priceCents,
-    input.billingMode,
-    input.school,
-    input.grade,
-    input.interests,
-    input.ambitions,
-    input.portrait === "boy" ? "boy" : "girl",
-    id,
-  );
+  const db = await userDb();
+  const { error } = await db
+    .from("clients")
+    .update({
+      name: input.name,
+      kind: input.kind,
+      subject_default: input.subject,
+      platform_default: input.platform,
+      location_default: input.location,
+      price_cents: input.priceCents,
+      billing_mode: input.billingMode,
+      school: input.school,
+      grade: input.grade,
+      interests: input.interests,
+      ambitions: input.ambitions,
+      portrait: input.portrait === "boy" ? "boy" : "girl",
+    })
+    .eq("id", id);
+  raise(error);
 }
 
-export function setStudentPin(clientId: string, pin: string) {
+export async function markPaysForSelf(clientId: string) {
+  const db = await userDb();
+  const { error } = await db.from("clients").update({ pays_self: true }).eq("id", clientId);
+  raise(error);
+}
+
+export async function setStudentPin(clientId: string, pin: string) {
   const salt = randomBytes(16).toString("hex");
   const hash = scryptSync(pin, salt, 32).toString("hex");
-  run("UPDATE clients SET student_pin_hash = ?, student_pin_salt = ? WHERE id = ?", hash, salt, clientId);
+  const admin = createAdminClient();
+  const { error } = await admin.from("student_pins").upsert({ client_id: clientId, pin_hash: hash, pin_salt: salt });
+  raise(error);
 }
 
-export function clearStudentPin(clientId: string) {
-  run("UPDATE clients SET student_pin_hash = NULL, student_pin_salt = NULL WHERE id = ?", clientId);
+export async function clearStudentPin(clientId: string) {
+  const admin = createAdminClient();
+  const { error } = await admin.from("student_pins").delete().eq("client_id", clientId);
+  raise(error);
 }
 
-export function matchStudent(name: string, pin: string) {
+export async function matchStudent(name: string, pin: string) {
   const wanted = name.trim().toLowerCase();
-  if (!wanted || !pin) return undefined;
-  const candidates = many<Client>(
-    "SELECT * FROM clients WHERE student_pin_hash IS NOT NULL AND status = 'active'",
-  ).filter((client) => client.name.trim().toLowerCase() === wanted);
-
-  const matches = candidates.filter((client) => {
-    if (!client.student_pin_hash || !client.student_pin_salt) return false;
-    const next = scryptSync(pin, client.student_pin_salt, 32);
-    const prev = Buffer.from(client.student_pin_hash, "hex");
+  if (!wanted || !/^\d{4,6}$/.test(pin)) return undefined;
+  const admin = createAdminClient();
+  const { data: clients, error } = await admin.from("clients").select("id, name").eq("status", "active");
+  raise(error);
+  const ids = (clients ?? []).filter((client) => String(client.name).trim().toLowerCase() === wanted).map((client) => client.id as string);
+  if (!ids.length) return undefined;
+  const { data: pins, error: pinError } = await admin.from("student_pins").select("client_id, pin_hash, pin_salt").in("client_id", ids);
+  raise(pinError);
+  const matches = (pins ?? []).filter((row) => {
+    const next = scryptSync(pin, row.pin_salt, 32);
+    const prev = Buffer.from(row.pin_hash, "hex");
     if (next.length !== prev.length) return false;
     return timingSafeEqual(next, prev);
   });
-
-  return matches.length === 1 ? matches[0] : undefined;
+  return matches.length === 1 ? { id: matches[0].client_id as string } : undefined;
 }
 
-export function listParentsOfClient(clientId: string) {
-  return many<Parent>(
-    `SELECT p.id, p.name, p.email, p.phone, p.social, p.occupation, p.locale, p.public_code
-     FROM parents p
-     JOIN client_parents cp ON cp.parent_id = p.id
-     WHERE cp.client_id = ?
-     ORDER BY p.name COLLATE NOCASE`,
-    clientId,
-  );
+export async function createStudentSession(clientId: string) {
+  const admin = createAdminClient();
+  const id = randomBytes(24).toString("hex");
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const { error } = await admin.from("student_sessions").insert({ id, client_id: clientId, expires_at: expiresAt });
+  raise(error);
+  return { id, expires_at: expiresAt };
 }
 
-export function listClientsOfParent(parentId: string) {
-  return many<Client>(
-    `SELECT c.* FROM clients c
-     JOIN client_parents cp ON cp.client_id = c.id
-     WHERE cp.parent_id = ? AND c.status = 'active'
-     ORDER BY c.name COLLATE NOCASE`,
-    parentId,
-  ).map(withStats);
+export async function readStudentSession(id: string) {
+  const admin = createAdminClient();
+  const { data, error } = await admin.from("student_sessions").select("id, client_id, expires_at").eq("id", id).maybeSingle();
+  raise(error);
+  if (!data) return undefined;
+  if (data.expires_at <= new Date().toISOString()) {
+    await admin.from("student_sessions").delete().eq("id", id);
+    return undefined;
+  }
+  return data as { id: string; client_id: string; expires_at: string };
 }
 
-export function insertLesson(input: {
+export async function deleteStudentSession(id: string) {
+  const admin = createAdminClient();
+  const { error } = await admin.from("student_sessions").delete().eq("id", id);
+  raise(error);
+}
+
+export async function getStudentView(clientId: string): Promise<StudentView | undefined> {
+  const admin = createAdminClient();
+  const { data: client, error } = await admin
+    .from("clients")
+    .select("id, teacher_id, name, public_code, status")
+    .eq("id", clientId)
+    .eq("status", "active")
+    .maybeSingle();
+  raise(error);
+  if (!client) return undefined;
+  const [{ data: lessons, error: lessonError }, { data: teacher, error: teacherError }] = await Promise.all([
+    admin
+      .from("lessons")
+      .select("id, client_id, occurred_on, subject, platform, location, materials, homework, duration_hours, created_at")
+      .eq("client_id", clientId)
+      .order("occurred_on", { ascending: false })
+      .order("created_at", { ascending: false }),
+    admin.from("profiles").select("id, name, email, phone, currency, locale, public_code, role, social, occupation, created_at").eq("id", client.teacher_id).maybeSingle(),
+  ]);
+  raise(lessonError);
+  raise(teacherError);
+  return {
+    client: {
+      id: client.id as string,
+      name: client.name as string,
+      public_code: (client.public_code as string | null) ?? "",
+      teacher_id: client.teacher_id as string,
+    },
+    lessons: ((lessons ?? []) as Lesson[]).map(asLesson),
+    teacher: teacher ? asTeacher(teacher as ProfileRow) : null,
+  };
+}
+
+export async function listParentsOfClient(clientId: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("client_parents").select("profiles(*)").eq("client_id", clientId);
+  raise(error);
+  return (data ?? [])
+    .map((row) => oneRel(row.profiles as ProfileRow | ProfileRow[] | null))
+    .filter((row): row is ProfileRow => Boolean(row))
+    .map(asParent)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function listClientsOfParent(parentId: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("client_parents").select("clients(*)").eq("parent_id", parentId);
+  raise(error);
+  const clients = (data ?? [])
+    .map((row) => oneRel(row.clients as ClientRow | ClientRow[] | null))
+    .filter((row): row is ClientRow => Boolean(row && row.status === "active"))
+    .map((row) => asClient(row))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return withStats(clients);
+}
+
+export async function insertLesson(input: {
   clientId: string;
   occurredOn: string;
   subject: string;
@@ -1007,40 +635,47 @@ export function insertLesson(input: {
   homework: string;
   durationHours?: number;
 }) {
+  const db = await userDb();
   const hours = input.durationHours && input.durationHours > 0 ? input.durationHours : 1;
-  run(
-    `INSERT INTO lessons (
-      id, client_id, occurred_on, subject, platform, location, materials, homework, duration_hours, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    cryptoId(),
-    input.clientId,
-    input.occurredOn,
-    input.subject,
-    input.platform,
-    input.location,
-    input.materials,
-    input.homework,
-    hours,
-    nowIso(),
-  );
+  const { error } = await db.from("lessons").insert({
+    client_id: input.clientId,
+    occurred_on: input.occurredOn,
+    subject: input.subject,
+    platform: input.platform,
+    location: input.location,
+    materials: input.materials,
+    homework: input.homework,
+    duration_hours: hours,
+  });
+  raise(error);
 }
 
-export function listLessons(clientId: string) {
-  return many<Lesson>(
-    "SELECT * FROM lessons WHERE client_id = ? ORDER BY occurred_on DESC, created_at DESC",
-    clientId,
-  );
+export async function listLessons(clientId: string) {
+  const db = await userDb();
+  const { data, error } = await db
+    .from("lessons")
+    .select("*")
+    .eq("client_id", clientId)
+    .order("occurred_on", { ascending: false })
+    .order("created_at", { ascending: false });
+  raise(error);
+  return ((data ?? []) as Lesson[]).map(asLesson);
 }
 
-export function getLesson(id: string) {
-  return one<Lesson>("SELECT * FROM lessons WHERE id = ?", id);
+export async function getLesson(id: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("lessons").select("*").eq("id", id).maybeSingle();
+  raise(error);
+  return data ? asLesson(data as Lesson) : undefined;
 }
 
-export function deleteLesson(id: string) {
-  run("DELETE FROM lessons WHERE id = ?", id);
+export async function deleteLesson(id: string) {
+  const db = await userDb();
+  const { error } = await db.from("lessons").delete().eq("id", id);
+  raise(error);
 }
 
-export function updateLesson(
+export async function updateLesson(
   id: string,
   input: {
     occurredOn: string;
@@ -1052,286 +687,400 @@ export function updateLesson(
     durationHours: number;
   },
 ) {
-  run(
-    `UPDATE lessons
-     SET occurred_on = ?, subject = ?, platform = ?, location = ?, materials = ?, homework = ?, duration_hours = ?
-     WHERE id = ?`,
-    input.occurredOn,
-    input.subject,
-    input.platform,
-    input.location,
-    input.materials,
-    input.homework,
-    input.durationHours,
-    id,
-  );
+  const db = await userDb();
+  const { error } = await db
+    .from("lessons")
+    .update({
+      occurred_on: input.occurredOn,
+      subject: input.subject,
+      platform: input.platform,
+      location: input.location,
+      materials: input.materials,
+      homework: input.homework,
+      duration_hours: input.durationHours,
+    })
+    .eq("id", id);
+  raise(error);
 }
 
-export function insertPayment(input: {
+export async function insertPayment(input: {
   clientId: string;
   paidOn: string;
   amountCents: number;
   lessonsAdded: number;
   hoursAdded?: number;
 }) {
-  run(
-    `INSERT INTO payments (id, client_id, paid_on, amount_cents, lessons_added, hours_added, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    cryptoId(),
-    input.clientId,
-    input.paidOn,
-    input.amountCents,
-    input.lessonsAdded,
-    input.hoursAdded ?? 0,
-    nowIso(),
-  );
+  const db = await userDb();
+  const { error } = await db.from("payments").insert({
+    client_id: input.clientId,
+    paid_on: input.paidOn,
+    amount_cents: input.amountCents,
+    lessons_added: input.lessonsAdded,
+    hours_added: input.hoursAdded ?? 0,
+  });
+  raise(error);
 }
 
-export function listPayments(clientId: string) {
-  return many<Payment>(
-    "SELECT * FROM payments WHERE client_id = ? ORDER BY paid_on DESC, created_at DESC",
-    clientId,
-  );
+export async function listPayments(clientId: string) {
+  const db = await userDb();
+  const { data, error } = await db
+    .from("payments")
+    .select("*")
+    .eq("client_id", clientId)
+    .order("paid_on", { ascending: false })
+    .order("created_at", { ascending: false });
+  raise(error);
+  return ((data ?? []) as Payment[]).map(asPayment);
 }
 
 export type ParentPayment = Payment & { client_name: string };
 
-export function listPaymentsForParent(parentId: string) {
-  return many<ParentPayment>(
-    `SELECT p.id, p.client_id, p.paid_on, p.amount_cents, p.lessons_added, p.hours_added, p.created_at,
-            c.name AS client_name
-     FROM payments p
-     JOIN clients c ON c.id = p.client_id
-     JOIN client_parents cp ON cp.client_id = c.id
-     WHERE cp.parent_id = ? AND c.status = 'active'
-     ORDER BY p.paid_on DESC, p.created_at DESC`,
-    parentId,
-  );
+export async function listPaymentsForParent(parentId: string) {
+  const db = await userDb();
+  const { data: links, error } = await db.from("client_parents").select("client_id, clients(name, status)").eq("parent_id", parentId);
+  raise(error);
+  const names = new Map<string, string>();
+  for (const link of links ?? []) {
+    const client = oneRel(link.clients as { name: string; status: string } | { name: string; status: string }[] | null);
+    if (client && client.status === "active") names.set(link.client_id as string, client.name);
+  }
+  const ids = [...names.keys()];
+  if (!ids.length) return [];
+  const { data, error: paymentError } = await db
+    .from("payments")
+    .select("*")
+    .in("client_id", ids)
+    .order("paid_on", { ascending: false })
+    .order("created_at", { ascending: false });
+  raise(paymentError);
+  return ((data ?? []) as Payment[]).map((row) => ({ ...asPayment(row), client_name: names.get(row.client_id) ?? "" }));
 }
 
-export function getPayment(id: string) {
-  return one<Payment>("SELECT * FROM payments WHERE id = ?", id);
+export async function getPayment(id: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("payments").select("*").eq("id", id).maybeSingle();
+  raise(error);
+  return data ? asPayment(data as Payment) : undefined;
 }
 
-export function deletePayment(id: string) {
-  run("DELETE FROM payments WHERE id = ?", id);
+export async function deletePayment(id: string) {
+  const db = await userDb();
+  const { error } = await db.from("payments").delete().eq("id", id);
+  raise(error);
 }
 
-export function insertRegistration(input: Omit<Registration, "id" | "status" | "created_at">) {
-  const id = cryptoId();
-  run(
-    `INSERT INTO registrations (
-      id, parent_name, parent_email, parent_phone, parent_social, parent_occupation,
-      child_name, school, grade, interests, ambitions, subject, portrait, pays_self, status, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-    id,
-    input.parent_name,
-    input.parent_email,
-    input.parent_phone,
-    input.parent_social,
-    input.parent_occupation,
-    input.child_name,
-    input.school,
-    input.grade,
-    input.interests,
-    input.ambitions,
-    input.subject,
-    input.portrait === "boy" ? "boy" : "girl",
-    input.pays_self ? 1 : 0,
-    nowIso(),
-  );
-  return id;
+export async function insertRegistration(code: string, input: Omit<Registration, "id" | "status" | "created_at">) {
+  const db = await userDb();
+  const { error } = await db.rpc("submit_registration", {
+    p_code: code,
+    p_parent_name: input.parent_name,
+    p_parent_email: input.parent_email,
+    p_parent_phone: input.parent_phone,
+    p_parent_social: input.parent_social,
+    p_parent_occupation: input.parent_occupation,
+    p_child_name: input.child_name,
+    p_school: input.school,
+    p_grade: input.grade,
+    p_interests: input.interests,
+    p_ambitions: input.ambitions,
+    p_subject: input.subject,
+    p_portrait: input.portrait,
+    p_pays_self: Boolean(input.pays_self),
+  });
+  const known = accessError(error);
+  if (known) return known;
+  raise(error);
+  return null;
 }
 
-export function listPendingRegistrations() {
-  return many<Registration>(
-    "SELECT * FROM registrations WHERE status = 'pending' ORDER BY created_at ASC",
-  );
+function asRegistration(row: Omit<Registration, "pays_self"> & { pays_self: boolean }): Registration {
+  return { ...row, pays_self: row.pays_self ? 1 : 0 };
 }
 
-export function getRegistration(id: string) {
-  return one<Registration>("SELECT * FROM registrations WHERE id = ?", id);
+export async function listPendingRegistrations() {
+  const db = await userDb();
+  const { data, error } = await db.from("registrations").select("*").eq("status", "pending").order("created_at", { ascending: true });
+  raise(error);
+  return (data ?? []).map((row) => asRegistration(row as Omit<Registration, "pays_self"> & { pays_self: boolean }));
 }
 
-export function setRegistrationStatus(id: string, status: "accepted" | "declined") {
-  run("UPDATE registrations SET status = ? WHERE id = ?", status, id);
+export async function getRegistration(id: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("registrations").select("*").eq("id", id).maybeSingle();
+  raise(error);
+  return data ? asRegistration(data as Omit<Registration, "pays_self"> & { pays_self: boolean }) : undefined;
 }
 
-export function pendingRegistrationCount() {
-  return one<{ n: number }>("SELECT COUNT(*) AS n FROM registrations WHERE status = 'pending'")?.n ?? 0;
+export async function setRegistrationStatus(id: string, status: "accepted" | "declined") {
+  const db = await userDb();
+  const { error } = await db.from("registrations").update({ status }).eq("id", id);
+  raise(error);
 }
 
-export function insertFeedbackNote(parentId: string, clientId: string | null, body: string, lessonId: string | null = null) {
-  run(
-    "INSERT INTO feedback_notes (id, parent_id, client_id, lesson_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    cryptoId(),
-    parentId,
-    clientId,
-    lessonId,
+export async function pendingRegistrationCount() {
+  const db = await userDb();
+  const { count, error } = await db.from("registrations").select("id", { count: "exact", head: true }).eq("status", "pending");
+  raise(error);
+  return count ?? 0;
+}
+
+export async function requestParentLink(input: { code: string; name: string; email: string }) {
+  const db = await userDb();
+  const { error } = await db.rpc("request_parent_link", {
+    p_code: input.code,
+    p_name: input.name,
+    p_email: input.email,
+  });
+  const known = accessError(error);
+  if (known) return known;
+  raise(error);
+  return null;
+}
+
+export async function listPendingParentRequests() {
+  const db = await userDb();
+  const { data, error } = await db
+    .from("parent_requests")
+    .select("id, client_id, name, email, status, created_at, clients(name)")
+    .eq("status", "pending")
+    .order("created_at", { ascending: true });
+  raise(error);
+  return (data ?? []).map((row) => ({
+    id: row.id as string,
+    client_id: row.client_id as string,
+    name: row.name as string,
+    email: row.email as string,
+    status: row.status as string,
+    created_at: row.created_at as string,
+    client_name: oneRel(row.clients as { name: string } | { name: string }[] | null)?.name ?? "",
+  }));
+}
+
+export async function getParentRequest(id: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("parent_requests").select("id, client_id, name, email, status, created_at, clients(name)").eq("id", id).maybeSingle();
+  raise(error);
+  if (!data) return undefined;
+  return {
+    id: data.id as string,
+    client_id: data.client_id as string,
+    name: data.name as string,
+    email: data.email as string,
+    status: data.status as string,
+    created_at: data.created_at as string,
+    client_name: oneRel(data.clients as { name: string } | { name: string }[] | null)?.name ?? "",
+  };
+}
+
+export async function setParentRequestStatus(id: string, status: "accepted" | "declined") {
+  const db = await userDb();
+  const { error } = await db.from("parent_requests").update({ status }).eq("id", id);
+  raise(error);
+}
+
+export async function pendingParentRequestCount() {
+  const db = await userDb();
+  const { count, error } = await db.from("parent_requests").select("id", { count: "exact", head: true }).eq("status", "pending");
+  raise(error);
+  return count ?? 0;
+}
+
+type NoteJoined = {
+  id: string;
+  parent_id: string;
+  client_id: string | null;
+  lesson_id: string | null;
+  body: string;
+  created_at: string;
+  archived: boolean;
+  parent: { name: string } | { name: string }[] | null;
+  client: { name: string } | { name: string }[] | null;
+  lesson: { occurred_on: string; subject: string } | { occurred_on: string; subject: string }[] | null;
+};
+
+function asNote(row: NoteJoined): FeedbackNote {
+  const lesson = oneRel(row.lesson);
+  return {
+    id: row.id,
+    parent_id: row.parent_id,
+    client_id: row.client_id,
+    lesson_id: row.lesson_id,
+    body: row.body,
+    created_at: row.created_at,
+    archived: row.archived ? 1 : 0,
+    parent_name: oneRel(row.parent)?.name ?? "",
+    client_name: oneRel(row.client)?.name ?? null,
+    lesson_on: lesson?.occurred_on ?? null,
+    lesson_subject: lesson?.subject ?? null,
+  };
+}
+
+type RequestJoined = {
+  id: string;
+  parent_id: string;
+  client_id: string | null;
+  teacher_id: string;
+  open_question: string;
+  status: string;
+  pace: number | null;
+  following_score: number | null;
+  homework_score: number | null;
+  overall: number | null;
+  open_answer: string;
+  created_at: string;
+  answered_at: string | null;
+  archived: boolean;
+  parent: { name: string } | { name: string }[] | null;
+  client: { name: string } | { name: string }[] | null;
+};
+
+function asRequest(row: RequestJoined): FeedbackRequest {
+  return {
+    id: row.id,
+    parent_id: row.parent_id,
+    client_id: row.client_id,
+    teacher_id: row.teacher_id,
+    open_question: row.open_question,
+    status: row.status,
+    pace: row.pace,
+    following_score: row.following_score,
+    homework_score: row.homework_score,
+    overall: row.overall,
+    open_answer: row.open_answer,
+    created_at: row.created_at,
+    answered_at: row.answered_at,
+    archived: row.archived ? 1 : 0,
+    parent_name: oneRel(row.parent)?.name ?? "",
+    client_name: oneRel(row.client)?.name ?? null,
+  };
+}
+
+export async function insertFeedbackNote(parentId: string, clientId: string | null, body: string, lessonId: string | null = null) {
+  const db = await userDb();
+  const { error } = await db.from("feedback_notes").insert({
+    parent_id: parentId,
+    client_id: clientId,
+    lesson_id: lessonId,
     body,
-    nowIso(),
-  );
+  });
+  raise(error);
 }
 
-const noteSelect = `
-  SELECT n.id, n.parent_id, n.client_id, n.lesson_id, n.body, n.created_at, n.archived,
-         p.name AS parent_name, c.name AS client_name,
-         l.occurred_on AS lesson_on, l.subject AS lesson_subject
-  FROM feedback_notes n
-  JOIN parents p ON p.id = n.parent_id
-  LEFT JOIN clients c ON c.id = n.client_id
-  LEFT JOIN lessons l ON l.id = n.lesson_id
-`;
-
-export function listFeedbackNotes() {
-  return many<FeedbackNote>(`${noteSelect} ORDER BY n.created_at DESC`);
+export async function listFeedbackNotes() {
+  const db = await userDb();
+  const { data, error } = await db.from("feedback_notes").select(noteSelect).order("created_at", { ascending: false });
+  raise(error);
+  return ((data ?? []) as NoteJoined[]).map(asNote);
 }
 
-export function listNotesForParent(parentId: string) {
-  return many<FeedbackNote>(`${noteSelect} WHERE n.parent_id = ? ORDER BY n.created_at DESC`, parentId);
+export async function listNotesForParent(parentId: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("feedback_notes").select(noteSelect).eq("parent_id", parentId).order("created_at", { ascending: false });
+  raise(error);
+  return ((data ?? []) as NoteJoined[]).map(asNote);
 }
 
-export function listNotesForClient(clientId: string) {
-  return many<FeedbackNote>(
-    `${noteSelect}
-     WHERE n.client_id = ?
-        OR (n.client_id IS NULL AND n.parent_id IN (SELECT parent_id FROM client_parents WHERE client_id = ?))
-     ORDER BY n.created_at DESC`,
-    clientId,
-    clientId,
-  );
+export async function listNotesForClient(clientId: string) {
+  const db = await userDb();
+  const { data: links, error: linkError } = await db.from("client_parents").select("parent_id").eq("client_id", clientId);
+  raise(linkError);
+  const parentIds = (links ?? []).map((row) => row.parent_id as string);
+  const { data: aboutClient, error } = await db.from("feedback_notes").select(noteSelect).eq("client_id", clientId).order("created_at", { ascending: false });
+  raise(error);
+  let general: NoteJoined[] = [];
+  if (parentIds.length) {
+    const { data, error: generalError } = await db
+      .from("feedback_notes")
+      .select(noteSelect)
+      .is("client_id", null)
+      .in("parent_id", parentIds)
+      .order("created_at", { ascending: false });
+    raise(generalError);
+    general = (data ?? []) as NoteJoined[];
+  }
+  const seen = new Set<string>();
+  return [...((aboutClient ?? []) as NoteJoined[]), ...general]
+    .filter((row) => {
+      if (seen.has(row.id)) return false;
+      seen.add(row.id);
+      return true;
+    })
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map(asNote);
 }
 
-export function insertFeedbackRequest(input: {
-  parentId: string;
-  clientId: string;
-  teacherId: string;
-  openQuestion: string;
-}) {
-  run(
-    `INSERT INTO feedback_requests (
-      id, parent_id, client_id, teacher_id, open_question, status, open_answer, created_at
-    ) VALUES (?, ?, ?, ?, ?, 'open', '', ?)`,
-    cryptoId(),
-    input.parentId,
-    input.clientId,
-    input.teacherId,
-    input.openQuestion,
-    nowIso(),
-  );
+export async function insertFeedbackRequest(input: { parentId: string; clientId: string; teacherId: string; openQuestion: string }) {
+  const db = await userDb();
+  const { error } = await db.from("feedback_requests").insert({
+    parent_id: input.parentId,
+    client_id: input.clientId,
+    teacher_id: input.teacherId,
+    open_question: input.openQuestion,
+    status: "open",
+    open_answer: "",
+  });
+  raise(error);
 }
 
-const requestSelect = `
-  SELECT r.*, p.name AS parent_name, c.name AS client_name
-  FROM feedback_requests r
-  JOIN parents p ON p.id = r.parent_id
-  LEFT JOIN clients c ON c.id = r.client_id
-`;
-
-export function listFeedbackRequests() {
-  return many<FeedbackRequest>(`${requestSelect} ORDER BY r.created_at DESC`);
+export async function listFeedbackRequests() {
+  const db = await userDb();
+  const { data, error } = await db.from("feedback_requests").select(requestSelect).order("created_at", { ascending: false });
+  raise(error);
+  return ((data ?? []) as RequestJoined[]).map(asRequest);
 }
 
-export function listRequestsForParent(parentId: string) {
-  return many<FeedbackRequest>(`${requestSelect} WHERE r.parent_id = ? ORDER BY r.created_at DESC`, parentId);
+export async function listRequestsForParent(parentId: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("feedback_requests").select(requestSelect).eq("parent_id", parentId).order("created_at", { ascending: false });
+  raise(error);
+  return ((data ?? []) as RequestJoined[]).map(asRequest);
 }
 
-export function getFeedbackRequest(id: string) {
-  return one<FeedbackRequest>("SELECT * FROM feedback_requests WHERE id = ?", id);
+export async function getFeedbackRequest(id: string) {
+  const db = await userDb();
+  const { data, error } = await db.from("feedback_requests").select("*").eq("id", id).maybeSingle();
+  raise(error);
+  if (!data) return undefined;
+  return {
+    ...(data as FeedbackRequest),
+    archived: data.archived ? 1 : 0,
+  } as FeedbackRequest;
 }
 
-export function answerFeedbackRequest(
+export async function answerFeedbackRequest(
   id: string,
   input: { pace: number; following: number; homework: number; overall: number; openAnswer: string },
 ) {
-  run(
-    `UPDATE feedback_requests
-     SET status = 'answered', pace = ?, following_score = ?, homework_score = ?, overall = ?,
-         open_answer = ?, answered_at = ?
-     WHERE id = ?`,
-    input.pace,
-    input.following,
-    input.homework,
-    input.overall,
-    input.openAnswer,
-    nowIso(),
-    id,
-  );
+  const db = await userDb();
+  const { error } = await db
+    .from("feedback_requests")
+    .update({
+      status: "answered",
+      pace: input.pace,
+      following_score: input.following,
+      homework_score: input.homework,
+      overall: input.overall,
+      open_answer: input.openAnswer,
+      answered_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+  raise(error);
 }
 
-export function setFeedbackArchived(kind: "request" | "note", id: string, archived: boolean) {
+export async function setFeedbackArchived(kind: "request" | "note", id: string, archived: boolean) {
+  const db = await userDb();
   const table = kind === "request" ? "feedback_requests" : "feedback_notes";
-  run(`UPDATE ${table} SET archived = ? WHERE id = ?`, archived ? 1 : 0, id);
+  const { error } = await db.from(table).update({ archived }).eq("id", id);
+  raise(error);
 }
 
-export function openRequestCount() {
-  return one<{ n: number }>("SELECT COUNT(*) AS n FROM feedback_requests WHERE status = 'open' AND archived = 0")?.n ?? 0;
-}
-
-export type MagicLink = {
-  token: string;
-  email: string;
-  role: "teacher" | "parent";
-  user_id: string;
-  locale: string;
-  expires_at: string;
-  used_at: string | null;
-};
-
-export type SessionRow = {
-  id: string;
-  role: Role;
-  user_id: string;
-  created_at: string;
-  expires_at: string;
-};
-
-export function createMagicLink(input: { email: string; role: "teacher" | "parent"; userId: string; locale: string }) {
-  const token = randomBytes(24).toString("hex");
-  const expires = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-  run(
-    `INSERT INTO magic_links (token, email, role, user_id, locale, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    token,
-    input.email,
-    input.role,
-    input.userId,
-    input.locale,
-    expires,
-  );
-  return token;
-}
-
-export function consumeMagicLink(token: string) {
-  const link = one<MagicLink>(
-    "SELECT * FROM magic_links WHERE token = ? AND used_at IS NULL AND expires_at > ?",
-    token,
-    nowIso(),
-  );
-  if (!link) return undefined;
-  run("UPDATE magic_links SET used_at = ? WHERE token = ?", nowIso(), token);
-  return link;
-}
-
-export function createSession(role: Role, userId: string) {
-  const id = randomBytes(24).toString("hex");
-  const created = nowIso();
-  const expires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  run(
-    "INSERT INTO sessions (id, role, user_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
-    id,
-    role,
-    userId,
-    created,
-    expires,
-  );
-  return one<SessionRow>("SELECT * FROM sessions WHERE id = ?", id)!;
-}
-
-export function getSessionRow(id: string) {
-  return one<SessionRow>("SELECT * FROM sessions WHERE id = ? AND expires_at > ?", id, nowIso());
-}
-
-export function deleteSession(id: string) {
-  run("DELETE FROM sessions WHERE id = ?", id);
+export async function openRequestCount() {
+  const db = await userDb();
+  const { count, error } = await db
+    .from("feedback_requests")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "open")
+    .eq("archived", false);
+  raise(error);
+  return count ?? 0;
 }

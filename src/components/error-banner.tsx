@@ -1,6 +1,6 @@
 import { getTranslations } from "next-intl/server";
 
-const keys = ["required", "emailTaken", "invalidAmount", "invalidPin", "unknownCode"] as const;
+const keys = ["required", "emailTaken", "invalidAmount", "invalidPin", "unknownCode", "short"] as const;
 
 export async function ErrorBanner({ code }: { code?: string }) {
   if (!code || !keys.includes(code as (typeof keys)[number])) return null;

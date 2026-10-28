@@ -2,7 +2,7 @@ import { getTranslations } from "next-intl/server";
 import { redirect } from "@/i18n/navigation";
 import { Shell } from "@/components/shell";
 import { getSession, homeFor } from "@/lib/auth";
-import { openRequestCount, pendingRegistrationCount } from "@/lib/db";
+import { openRequestCount, pendingParentRequestCount, pendingRegistrationCount } from "@/lib/db";
 
 export default async function TeacherLayout({
   children,
@@ -23,8 +23,8 @@ export default async function TeacherLayout({
   }
 
   const t = await getTranslations("nav");
-  const signups = pendingRegistrationCount();
-  const feedback = openRequestCount();
+  const signups = (await pendingRegistrationCount()) + (await pendingParentRequestCount());
+  const feedback = await openRequestCount();
 
   return (
     <Shell

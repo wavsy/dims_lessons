@@ -7,10 +7,10 @@ import { formatDay, formatMoney } from "@/lib/format";
 
 export default async function ParentPaymentsPage() {
   const session = await requireSession("parent");
-  const teacher = getTeacher();
+  const teacher = await getTeacher();
   const locale = await getLocale();
   const t = await getTranslations("parent");
-  const payments = listPaymentsForParent(session.user_id);
+  const payments = await listPaymentsForParent(session.user_id);
   const money = (cents: number) => formatMoney(cents, teacher?.currency ?? "EUR", locale);
 
   return (

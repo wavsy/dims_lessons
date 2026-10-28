@@ -70,7 +70,7 @@ export function ParentLessons({
       {open
         ? createPortal(
             <div className="fixed inset-0 z-40">
-              <button type="button" className="absolute inset-0 bg-ink/30 backdrop-blur-[2px]" aria-label={labels.close} onClick={() => setOpenId(null)} />
+              <button type="button" className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" aria-label={labels.close} onClick={() => setOpenId(null)} />
               <div className="pointer-events-none relative flex h-full items-end justify-center overflow-y-auto p-3 sm:items-center sm:p-8">
                 <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="rise pointer-events-auto w-full max-w-xl rounded-[28px] bg-ivory p-6 shadow-card sm:p-8">
                   <div className="flex items-start justify-between gap-4">
@@ -113,7 +113,7 @@ export function ParentLessons({
       {feedback
         ? createPortal(
             <div className="fixed inset-0 z-50">
-              <button type="button" className="absolute inset-0 bg-ink/30 backdrop-blur-[2px]" aria-label={labels.close} onClick={() => setFeedbackId(null)} />
+              <button type="button" className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" aria-label={labels.close} onClick={() => setFeedbackId(null)} />
               <div className="pointer-events-none relative flex h-full items-end justify-center p-3 sm:items-center sm:p-8">
                 <form action={addLessonFeedback} role="dialog" aria-modal="true" aria-labelledby={feedbackTitleId} className="rise pointer-events-auto w-full max-w-md rounded-[28px] bg-ivory p-6 shadow-card">
                   <input type="hidden" name="clientId" value={clientId} />

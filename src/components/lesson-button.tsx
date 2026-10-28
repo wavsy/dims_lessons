@@ -106,7 +106,7 @@ export function LessonButton({
       {open
         ? createPortal(
             <div className="fixed inset-0 z-40 overflow-y-auto">
-              <button type="button" className="fixed inset-0 bg-ink/30 backdrop-blur-[2px]" aria-label={closeLabel} onClick={() => setOpen(false)} />
+              <button type="button" className="fixed inset-0 bg-black/40 backdrop-blur-[2px]" aria-label={closeLabel} onClick={() => setOpen(false)} />
               <div className="pointer-events-none relative flex min-h-full items-end justify-center p-3 sm:items-center sm:p-8">
                 <div
                   role="dialog"

@@ -3,9 +3,7 @@ import { LanguageSwitch } from "@/components/language-switch";
 import { BrandLink } from "@/components/brand-link";
 import { primaryButton } from "@/components/fields";
 import { Link } from "@/i18n/navigation";
-import { signInWithPassword } from "@/lib/actions";
-import { DEMO_ACCOUNTS } from "@/lib/demo-accounts";
-import { getDb } from "@/lib/db";
+import { signInStudent, signInWithPassword } from "@/lib/actions";
 
 export default async function LoginPage({
   searchParams,
@@ -13,26 +11,18 @@ export default async function LoginPage({
   searchParams: Promise<{ error?: string }>;
 }) {
   const { error } = await searchParams;
-  getDb();
   const t = await getTranslations("auth");
-  const roleLabel = {
-    teacher: t("teacherRole"),
-    parent: t("parentRole"),
-    student: t("studentRole"),
-  };
 
   return (
     <div className="mx-auto flex min-h-screen max-w-lg flex-col px-5 py-8">
-      <div className="mb-8 flex items-center justify-between">
+      <div className="mb-8 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
         <BrandLink />
         <LanguageSwitch />
       </div>
-      <p className="kicker">01</p>
-      <h1 className="mt-2 font-display text-4xl">{t("signInTitle")}</h1>
+      <h1 className="font-display text-4xl">{t("signInTitle")}</h1>
       <p className="mt-2 text-soft">{t("signInLead")}</p>
-      {error === "invalid" ? (
-        <p className="mt-6 rounded-2xl bg-butter px-4 py-3 text-sm font-bold">{t("invalid")}</p>
-      ) : null}
+      {error === "invalid" ? <p className="mt-6 rounded-2xl bg-butter px-4 py-3 text-sm font-bold">{t("invalid")}</p> : null}
+      {error === "expired" ? <p className="mt-6 rounded-2xl bg-butter px-4 py-3 text-sm font-bold">{t("expired")}</p> : null}
       <form action={signInWithPassword} className="mt-6 space-y-4 rounded-2xl bg-ivory p-5 shadow-card">
         <label className="block">
           <span className="label">{t("email")}</span>
@@ -46,27 +36,29 @@ export default async function LoginPage({
           {t("enter")}
         </button>
       </form>
-      {process.env.NODE_ENV === "development" ? (
-        <table className="mt-8 w-full text-left text-sm">
-          <caption className="mb-3 text-left text-soft">{t("demoLead")}</caption>
-          <thead>
-            <tr className="border-b border-faint text-soft">
-              <th className="py-2 font-medium">{t("role")}</th>
-              <th className="py-2 font-medium">{t("email")}</th>
-              <th className="py-2 font-medium">{t("password")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {DEMO_ACCOUNTS.map((account) => (
-              <tr key={account.email} className="border-b border-faint">
-                <td className="py-2">{roleLabel[account.role]}</td>
-                <td className="py-2">{account.email}</td>
-                <td className="py-2">{account.password}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : null}
+
+      <h2 className="mt-10 font-display text-3xl">{t("studentTitle")}</h2>
+      <p className="mt-2 text-soft">{t("studentLead")}</p>
+      {error === "student" ? <p className="mt-6 rounded-2xl bg-butter px-4 py-3 text-sm font-bold">{t("studentFail")}</p> : null}
+      <form action={signInStudent} className="mt-6 space-y-4 rounded-2xl bg-ivory p-5 shadow-card">
+        <label className="block">
+          <span className="label">{t("name")}</span>
+          <input className="field" name="name" required autoComplete="username" />
+        </label>
+        <label className="block">
+          <span className="label">{t("pin")}</span>
+          <input className="field" name="pin" inputMode="numeric" autoComplete="off" required minLength={4} maxLength={6} />
+        </label>
+        <button className={primaryButton} type="submit">
+          {t("enter")}
+        </button>
+      </form>
+      <Link href="/register" className="mt-6 text-sm font-bold text-soft">
+        {t("register")}
+      </Link>
+      <Link href="/join" className="mt-2 text-sm font-bold text-soft">
+        {t("join")}
+      </Link>
       <Link href="/" className="mt-6 text-sm font-bold text-soft">
         {t("back")}
       </Link>

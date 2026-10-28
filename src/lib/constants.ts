@@ -10,8 +10,6 @@ export type Location = (typeof LOCATIONS)[number];
 export type BillingMode = (typeof BILLING_MODES)[number];
 export type Kind = (typeof KINDS)[number];
 
-export const TEACHER_EMAIL = "dimi@lessons.app";
-
 export function isOneOf<T extends string>(values: readonly T[], value: string): value is T {
   return (values as readonly string[]).includes(value);
 }

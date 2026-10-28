@@ -18,7 +18,7 @@ export default async function RegisterPage({
 
   return (
     <div className="mx-auto min-h-screen max-w-lg px-5 py-8">
-      <div className="mb-8 flex items-center justify-between">
+      <div className="mb-8 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
         <BrandLink />
         <LanguageSwitch />
       </div>
@@ -35,6 +35,10 @@ export default async function RegisterPage({
           <p className="kicker">{t("kicker")}</p>
           <h1 className="mt-2 font-display text-4xl">{t("title")}</h1>
           <p className="mt-2 text-soft">{t("lead")}</p>
+          <p className="mt-3 text-sm text-soft">{t("privacy")}</p>
+          <Link href="/join" className="mt-3 inline-block text-sm font-bold text-soft">
+            {t("otherParent")}
+          </Link>
           <ErrorBanner code={error} />
           <RegisterForm subjects={options.subjects} code={code ?? ""} pays={pays === "1"} />
         </>

@@ -8,12 +8,12 @@ export default async function TeacherFeedbackPage() {
   const t = await getTranslations("feedback");
   const locale = await getLocale();
   const options = await choiceOptions();
-  const notes = listFeedbackNotes();
+  const notes = await listFeedbackNotes();
   const aboutLesson = (note: (typeof notes)[number]) => {
     const when = lessonWhen(note.lesson_on, note.lesson_subject, locale, (value) => labelOf(options.subjects, value));
     return when ? t("aboutLesson", { when }) : "";
   };
-  const requests = listFeedbackRequests();
+  const requests = await listFeedbackRequests();
   const requestTickets = requests.map((request) => ({
     id: request.id,
     kind: "request",

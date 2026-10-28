@@ -19,14 +19,14 @@ export default async function ChildPage({
   const { id } = await params;
   const query = await searchParams;
   const session = await getSession();
-  if (!session || !parentLinkedTo(session.user_id, id)) notFound();
-  const client = getClient(id);
+  if (!session || session.role !== "parent" || !(await parentLinkedTo(session.user_id, id))) notFound();
+  const client = await getClient(id);
   if (!client) notFound();
 
   const locale = await getLocale();
   const t = await getTranslations("parent");
   const options = await choiceOptions();
-  const lessons = listLessons(client.id);
+  const lessons = await listLessons(client.id);
 
   return (
     <div>

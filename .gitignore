@@ -5,3 +5,5 @@ out
 *.tsbuildinfo
 .env*.local
 data/
+.cursor/
+supabase/.temp/

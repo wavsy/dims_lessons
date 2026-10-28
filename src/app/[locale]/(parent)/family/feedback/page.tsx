@@ -19,9 +19,9 @@ export default async function ParentFeedbackPage({
   const t = await getTranslations("feedback");
   const settings = await getTranslations("settings");
   const options = await choiceOptions();
-  const children = listClientsOfParent(session.user_id);
-  const notes = listNotesForParent(session.user_id);
-  const requests = listRequestsForParent(session.user_id);
+  const children = await listClientsOfParent(session.user_id);
+  const notes = await listNotesForParent(session.user_id);
+  const requests = await listRequestsForParent(session.user_id);
   const open = requests.filter((request) => request.status === "open");
   const marks = [1, 2, 3, 4, 5].map((value) => ({ value, name: t(`mood${value}` as "mood1") }));
 

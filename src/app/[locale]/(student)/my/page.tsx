@@ -3,19 +3,20 @@ import { HomeworkWand } from "@/components/homework-gate";
 import { EmptyState } from "@/components/empty-state";
 import { TeacherReveal } from "@/components/teacher-reveal";
 import { requireSession } from "@/lib/auth";
-import { getClient, getTeacherById, listLessons } from "@/lib/db";
+import { getStudentView } from "@/lib/db";
 import { formatCode, formatDay } from "@/lib/format";
 import { choiceOptions, labelOf } from "@/lib/labels";
 
 export default async function StudentHomePage() {
   const session = await requireSession("student");
-  const client = getClient(session.user_id);
+  const view = await getStudentView(session.user_id);
+  const client = view?.client;
   const locale = await getLocale();
   const t = await getTranslations("studentHome");
   const options = await choiceOptions();
-  const lessons = client ? listLessons(client.id) : [];
+  const lessons = view?.lessons ?? [];
   const homework = lessons.filter((lesson) => lesson.homework.trim());
-  const teacher = client ? getTeacherById(client.teacher_id) : null;
+  const teacher = view?.teacher ?? null;
 
   if (!client) {
     return <EmptyState title={t("emptyTitle")} lead={t("emptyLead")} />;

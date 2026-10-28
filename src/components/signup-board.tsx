@@ -48,7 +48,7 @@ export function SignupBoard({
       </ul>
       {open ? (
         <div className="fixed inset-0 z-40">
-          <button type="button" className="absolute inset-0 bg-ink/30 backdrop-blur-[2px]" aria-label={closeLabel} onClick={() => setOpen(null)} />
+          <button type="button" className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" aria-label={closeLabel} onClick={() => setOpen(null)} />
           <div className="pointer-events-none relative flex h-full items-end justify-center p-3 sm:items-center sm:p-8">
             <div role="dialog" aria-modal="true" className="rise pointer-events-auto max-h-[min(88vh,760px)] w-full max-w-lg overflow-y-auto rounded-[28px] bg-ivory p-5 shadow-card sm:p-7">
               <div className="mb-4 flex justify-end">

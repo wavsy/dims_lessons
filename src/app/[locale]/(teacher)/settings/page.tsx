@@ -12,7 +12,7 @@ export default async function SettingsPage({
 }) {
   const { error, saved } = await searchParams;
   const session = await requireSession("teacher");
-  const teacher = getTeacherById(session.user_id)!;
+  const teacher = (await getTeacherById(session.user_id))!;
   const t = await getTranslations("settings");
   const hasNotice = Boolean(error || saved === "1");
 

@@ -52,21 +52,21 @@ export default async function ClientPage({
   const { id } = await params;
   const query = await searchParams;
   const session = await getSession();
-  const client = getClient(id);
+  const client = await getClient(id);
   if (!client || client.teacher_id !== session?.user_id) notFound();
 
-  const teacher = getTeacherById(session.user_id)!;
+  const teacher = (await getTeacherById(session.user_id))!;
   const locale = await getLocale();
   const t = await getTranslations("client");
   const feedback = await getTranslations("feedback");
   const settings = await getTranslations("settings");
   const status = await getTranslations("status");
   const options = await choiceOptions();
-  const lessons = listLessons(client.id);
-  const payments = listPayments(client.id);
-  const parents = listParentsOfClient(client.id);
-  const notes = listNotesForClient(client.id);
-  const requests = listFeedbackRequests().filter((request) => request.client_id === client.id);
+  const lessons = await listLessons(client.id);
+  const payments = await listPayments(client.id);
+  const parents = await listParentsOfClient(client.id);
+  const notes = await listNotesForClient(client.id);
+  const requests = (await listFeedbackRequests()).filter((request) => request.client_id === client.id);
   const money = (cents: number) => formatMoney(cents, teacher.currency, locale);
   const price = (client.price_cents / 100).toFixed(2);
   const meta = [
@@ -109,7 +109,7 @@ export default async function ClientPage({
     ...(client.grade ? [{ label: t("grade"), value: client.grade }] : []),
     ...(client.interests ? [{ label: t("interests"), value: client.interests }] : []),
     ...(client.ambitions ? [{ label: t("ambitions"), value: client.ambitions }] : []),
-    { label: t("pin"), value: client.student_pin_hash ? t("pinSet") : t("pinOff") },
+    { label: t("pin"), value: client.pin_set ? t("pinSet") : t("pinOff") },
   ];
 
   const widgets: WidgetModel[] = [
@@ -171,7 +171,7 @@ export default async function ClientPage({
       figure: money(client.price_cents),
       caption: labelOf(options.billing, client.billing_mode),
       detail: profileBits || undefined,
-      notes: [client.student_pin_hash ? t("pinSet") : t("pinOff")],
+      notes: [client.pin_set ? t("pinSet") : t("pinOff")],
       tone: "plain",
       size: "wide",
       display: "stat",
@@ -184,7 +184,7 @@ export default async function ClientPage({
       caption:
         parents.length === 0
           ? t("noParents")
-          : parents.length === 1 && parents[0].public_code === client.public_code
+          : parents.length === 1 && client.pays_self
             ? t("paysSelf")
             : parents.length === 1
               ? parents[0].email.endsWith("@lessons.local")
@@ -476,21 +476,10 @@ export default async function ClientPage({
           ),
           parents: (
             <div className="space-y-6">
-              {parents.some((parent) => parent.public_code && parent.public_code === client.public_code) ? (
+              {client.pays_self ? (
                 <div className="rounded-3xl bg-peach px-4 py-3">
                   <p className="font-bold">{t("paysSelf")}</p>
                   <p className="mt-1 text-sm tracking-[0.2em] text-soft">{formatCode(client.public_code)}</p>
-                  {parents
-                    .filter((parent) => parent.public_code === client.public_code)
-                    .map((parent) => (
-                      <div key={parent.id} className="mt-2 flex items-start justify-between gap-3 text-sm">
-                        <div>
-                          {parent.phone ? <PhoneLink phone={parent.phone} /> : null}
-                          {parent.email.endsWith("@lessons.local") ? null : <p className="text-soft">{parent.email}</p>}
-                        </div>
-                        <RemoveParent clientId={client.id} parentId={parent.id} t={t} />
-                      </div>
-                    ))}
                 </div>
               ) : (
                 <form action={markSelfPayer}>
@@ -500,14 +489,9 @@ export default async function ClientPage({
                   </button>
                 </form>
               )}
-              {parents.filter((parent) => parent.public_code !== client.public_code).length === 0 &&
-              !parents.some((parent) => parent.public_code === client.public_code) ? (
-                <p className="text-soft">{t("noParents")}</p>
-              ) : null}
+              {parents.length === 0 ? <p className="text-soft">{t("noParents")}</p> : null}
               <RecordList>
-                {parents
-                  .filter((parent) => parent.public_code !== client.public_code)
-                  .map((parent) => (
+                {parents.map((parent) => (
                     <li key={parent.id} className="flex items-start justify-between gap-3 rounded-3xl bg-paper px-4 py-3">
                       <div>
                         <p className="font-bold">{parent.name}</p>
@@ -686,11 +670,11 @@ function isPanel(value?: string): value is PanelId {
 }
 
 function feedbackFeed(
-  requests: ReturnType<typeof listFeedbackRequests>,
-  notes: ReturnType<typeof listNotesForClient>,
+  requests: Awaited<ReturnType<typeof listFeedbackRequests>>,
+  notes: Awaited<ReturnType<typeof listNotesForClient>>,
   locale: string,
   feedback: (key: "pace" | "following" | "homework" | "overall", values?: Record<string, string | number>) => string,
-  aboutLesson: (note: ReturnType<typeof listNotesForClient>[number]) => string,
+  aboutLesson: (note: Awaited<ReturnType<typeof listNotesForClient>>[number]) => string,
 ): (FeedbackItem & { archived: boolean; sort: string })[] {
   const fromRequests = requests.map((request) => ({
     id: request.id,

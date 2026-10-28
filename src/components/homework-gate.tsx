@@ -39,7 +39,7 @@ export function HomeworkWand({ homework }: { homework: string }) {
       {step !== "closed"
         ? createPortal(
             <div className="fixed inset-0 z-50">
-              <button type="button" className="absolute inset-0 bg-ink/30 backdrop-blur-[2px]" aria-label={t("close")} onClick={() => setStep("closed")} />
+              <button type="button" className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" aria-label={t("close")} onClick={() => setStep("closed")} />
               <div className="pointer-events-none relative flex h-full items-end justify-center p-3 sm:items-center sm:p-8">
                 <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="rise pointer-events-auto w-full max-w-sm rounded-[28px] bg-ivory p-5 shadow-card">
                   <p className="text-sm font-bold text-soft">{homework}</p>

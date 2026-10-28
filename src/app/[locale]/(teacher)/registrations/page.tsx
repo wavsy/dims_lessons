@@ -7,9 +7,9 @@ import { butterButton, primaryButton } from "@/components/fields";
 import { InviteLink } from "@/components/invite-link";
 import { PhoneLink } from "@/components/phone-link";
 import { SignupBoard } from "@/components/signup-board";
-import { acceptRegistration, declineRegistration } from "@/lib/actions";
+import { acceptParentRequest, acceptRegistration, declineParentRequest, declineRegistration } from "@/lib/actions";
 import { requireSession } from "@/lib/auth";
-import { getTeacherById, listPendingRegistrations } from "@/lib/db";
+import { getTeacherById, listPendingParentRequests, listPendingRegistrations } from "@/lib/db";
 import { formatCode } from "@/lib/format";
 import { choiceOptions, labelOf } from "@/lib/labels";
 
@@ -20,11 +20,12 @@ export default async function RegistrationsPage({
 }) {
   const { error } = await searchParams;
   const session = await requireSession("teacher");
-  const teacher = getTeacherById(session.user_id);
+  const teacher = await getTeacherById(session.user_id);
   const t = await getTranslations("signups");
   const client = await getTranslations("client");
   const options = await choiceOptions();
-  const rows = listPendingRegistrations();
+  const rows = await listPendingRegistrations();
+  const parentRequests = await listPendingParentRequests();
   const panels = Object.fromEntries(
     rows.map((row) => [
       row.id,
@@ -84,9 +85,10 @@ export default async function RegistrationsPage({
       </div>
       <p className="-mt-4 mb-6 max-w-md text-sm text-soft">{t("inviteLead")}</p>
       <ErrorBanner code={error} />
-      {rows.length === 0 ? (
+      {rows.length === 0 && parentRequests.length === 0 ? (
         <EmptyState title={t("emptyTitle")} lead={t("emptyLead")} />
-      ) : (
+      ) : null}
+      {rows.length > 0 ? (
         <SignupBoard
           closeLabel={client("close")}
           cards={rows.map((row) => ({
@@ -97,7 +99,40 @@ export default async function RegistrationsPage({
           }))}
           panels={panels}
         />
-      )}
+      ) : null}
+      {parentRequests.length > 0 ? (
+        <section className="mt-8 space-y-4">
+          <h2 className="font-display text-3xl">{t("otherParent")}</h2>
+          <p className="max-w-md text-sm text-soft">{t("otherParentLead")}</p>
+          <ul className="space-y-4">
+            {parentRequests.map((request) => (
+              <li key={request.id} className="rounded-[28px] bg-ivory p-5 shadow-card">
+                <h3 className="font-display text-3xl">{request.name}</h3>
+                <p className="mt-1 text-soft">{request.email}</p>
+                <p className="mt-3 text-sm">{t("forStudent", { name: request.client_name })}</p>
+                <div className="mt-6 flex flex-wrap items-center gap-4">
+                  <form action={acceptParentRequest}>
+                    <input type="hidden" name="id" value={request.id} />
+                    <button className={primaryButton} type="submit">
+                      {t("accept")}
+                    </button>
+                  </form>
+                  <form action={declineParentRequest}>
+                    <input type="hidden" name="id" value={request.id} />
+                    <ConfirmSubmit
+                      label={t("decline")}
+                      title={t("declineAsk")}
+                      message={t("declineLead")}
+                      cancel={client("cancel")}
+                      className={butterButton}
+                    />
+                  </form>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </div>
   );
 }

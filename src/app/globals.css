@@ -25,15 +25,78 @@ html {
   scroll-behavior: smooth;
   background: var(--color-paper);
   color: var(--color-ink);
+  color-scheme: light;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  --glow-peach: rgba(247, 224, 207, 0.85);
+  --glow-blush: rgba(243, 212, 216, 0.55);
+  --field-bg: #fff;
+  --field-linked-bg: #fff8ec;
+  --field-ring: rgba(17, 17, 17, 0.1);
+  --field-linked-ring: rgba(196, 122, 42, 0.55);
+  --rail-bg: rgba(17, 17, 17, 0.045);
+  --rail-ring: rgba(17, 17, 17, 0.05);
+  --indicator-bg: #fff;
+  --indicator-shadow:
+    0 1px 1px rgba(17, 17, 17, 0.04),
+    0 8px 18px rgba(17, 17, 17, 0.1);
+  --hover-bg: rgba(255, 255, 255, 0.7);
+  --nav-muted: rgba(17, 17, 17, 0.58);
+  --badge-ring: #f3f3f0;
+  --badge-ring-current: #fff;
+  --enchanted-fill: #fff;
+  --enchanted-glow: rgba(243, 213, 160, 0.55);
+  --todo-fill: #fff;
+  --todo-glow-a: rgba(247, 224, 207, 0.95);
+  --todo-glow-b: rgba(243, 213, 160, 0.55);
+  --pay-hover: #2c241c;
+}
+
+html.dark {
+  color-scheme: dark;
+  --color-paper: #13110f;
+  --color-ivory: #211e1a;
+  --color-ink: #f4efe6;
+  --color-soft: #b9b1a6;
+  --color-mute: #8f877c;
+  --color-faint: #3d372f;
+  --color-peach: #3c2c24;
+  --color-blush: #3a292d;
+  --color-apricot: #f09a6c;
+  --color-apricot-deep: #e48455;
+  --color-sage: #7dcea0;
+  --color-amber: #f0b14a;
+  --color-coral: #e88872;
+  --shadow-card: 0 0 0 1px rgba(244, 239, 230, 0.1);
+  --glow-peach: rgba(120, 64, 40, 0.42);
+  --glow-blush: rgba(110, 46, 62, 0.32);
+  --field-bg: #2b2723;
+  --field-linked-bg: #3a3024;
+  --field-ring: rgba(244, 239, 230, 0.14);
+  --field-linked-ring: rgba(224, 154, 90, 0.72);
+  --rail-bg: rgba(244, 239, 230, 0.06);
+  --rail-ring: rgba(244, 239, 230, 0.08);
+  --indicator-bg: #34302b;
+  --indicator-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.24),
+    0 8px 18px rgba(0, 0, 0, 0.32);
+  --hover-bg: rgba(244, 239, 230, 0.08);
+  --nav-muted: rgba(244, 239, 230, 0.58);
+  --badge-ring: #211e1a;
+  --badge-ring-current: #34302b;
+  --enchanted-fill: #2c261e;
+  --enchanted-glow: rgba(224, 162, 60, 0.22);
+  --todo-fill: #2c261e;
+  --todo-glow-a: rgba(196, 98, 58, 0.32);
+  --todo-glow-b: rgba(224, 162, 60, 0.2);
+  --pay-hover: #e7e0d4;
 }
 
 body {
   min-height: 100dvh;
   background:
-    radial-gradient(820px 420px at -8% -10%, rgba(247, 224, 207, 0.85), transparent 52%),
-    radial-gradient(720px 380px at 108% 0%, rgba(243, 212, 216, 0.55), transparent 48%),
+    radial-gradient(820px 420px at -8% -10%, var(--glow-peach), transparent 52%),
+    radial-gradient(720px 380px at 108% 0%, var(--glow-blush), transparent 48%),
     var(--color-paper);
   color: var(--color-ink);
 }
@@ -141,15 +204,27 @@ h3 {
 .field {
   width: 100%;
   border-radius: 10px;
-  background: #fff;
+  background: var(--field-bg);
   padding: 0.8rem 0.9rem;
   color: var(--color-ink);
-  box-shadow: inset 0 0 0 1px rgba(17, 17, 17, 0.1);
+  box-shadow: inset 0 0 0 1px var(--field-ring);
+}
+
+.field::placeholder {
+  color: var(--color-mute);
 }
 
 .field.is-linked {
-  background: #fff8ec;
-  box-shadow: inset 0 0 0 1.5px rgba(196, 122, 42, 0.55);
+  background: var(--field-linked-bg);
+  box-shadow: inset 0 0 0 1.5px var(--field-linked-ring);
+}
+
+.bg-butter {
+  color: #24180f;
+}
+
+html.dark .shadow-card {
+  box-shadow: 0 0 0 1px rgba(244, 239, 230, 0.12);
 }
 
 .nav-link {
@@ -219,8 +294,8 @@ h3 {
   overflow-x: auto;
   padding: 0.28rem;
   border-radius: 999px;
-  background: rgba(17, 17, 17, 0.045);
-  box-shadow: 0 0 0 1px rgba(17, 17, 17, 0.05);
+  background: var(--rail-bg);
+  box-shadow: 0 0 0 1px var(--rail-ring);
   scrollbar-width: none;
 }
 
@@ -239,10 +314,8 @@ h3 {
 }
 
 .nav-indicator {
-  background: #fff;
-  box-shadow:
-    0 1px 1px rgba(17, 17, 17, 0.04),
-    0 8px 18px rgba(17, 17, 17, 0.1);
+  background: var(--indicator-bg);
+  box-shadow: var(--indicator-shadow);
 }
 
 .nav-rail[data-ready] .nav-indicator,
@@ -256,7 +329,7 @@ h3 {
 
 .nav-hover {
   z-index: 0;
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--hover-bg);
 }
 
 .nav-item {
@@ -276,7 +349,7 @@ h3 {
   font-weight: 500;
   letter-spacing: -0.01em;
   white-space: nowrap;
-  color: rgba(17, 17, 17, 0.58);
+  color: var(--nav-muted);
   transition: color 280ms var(--ease-out-soft);
 }
 
@@ -289,6 +362,16 @@ h3 {
 .nav-item:focus-visible {
   outline: 2px solid var(--color-ink);
   outline-offset: 3px;
+}
+
+.nav-item.theme-item {
+  padding-inline: 0.72rem;
+}
+
+.theme-item svg {
+  display: block;
+  width: 1.05rem;
+  height: 1.05rem;
 }
 
 .nav-badge {
@@ -305,12 +388,12 @@ h3 {
   font-variant-numeric: tabular-nums;
   line-height: 1;
   letter-spacing: 0;
-  box-shadow: 0 0 0 2px #f3f3f0;
+  box-shadow: 0 0 0 2px var(--badge-ring);
   animation: pop 0.35s var(--ease-out-soft);
 }
 
 .nav-item[aria-current="page"] .nav-badge {
-  box-shadow: 0 0 0 2px #fff;
+  box-shadow: 0 0 0 2px var(--badge-ring-current);
 }
 
 .btn:disabled {
@@ -986,8 +1069,11 @@ h3 {
   border: 0;
   border-radius: 999px;
   padding: 0.45rem 0.9rem;
-  background: rgba(255, 255, 255, 0.86);
-  color: var(--color-ink);
+  background: #fff;
+  color: #141210;
+  box-shadow:
+    0 0 0 1px rgba(17, 17, 17, 0.16),
+    0 8px 18px rgba(17, 17, 17, 0.22);
   font: inherit;
   font-size: 14px;
   cursor: pointer;
@@ -995,8 +1081,8 @@ h3 {
 
 .enchanted {
   background:
-    radial-gradient(160px 110px at 100% 0%, rgba(243, 213, 160, 0.55), transparent 72%),
-    #fff;
+    radial-gradient(160px 110px at 100% 0%, var(--enchanted-glow), transparent 72%),
+    var(--enchanted-fill);
   box-shadow:
     0 0 0 1px rgba(17, 17, 17, 0.08),
     0 12px 28px rgba(176, 122, 42, 0.08);
@@ -1257,9 +1343,9 @@ h3 {
 
 .todo-live {
   background:
-    radial-gradient(220px 120px at 0% 0%, rgba(247, 224, 207, 0.95), transparent 62%),
-    radial-gradient(180px 120px at 100% 100%, rgba(243, 213, 160, 0.55), transparent 70%),
-    #fff;
+    radial-gradient(220px 120px at 0% 0%, var(--todo-glow-a), transparent 62%),
+    radial-gradient(180px 120px at 100% 100%, var(--todo-glow-b), transparent 70%),
+    var(--todo-fill);
   animation: todo-shine 3.6s ease-in-out infinite, charm-float 4.4s ease-in-out infinite;
 }
 
@@ -1337,7 +1423,7 @@ h3 {
 
 .pay-save:hover {
   transform: translateY(-2px);
-  background: #2c241c;
+  background: var(--pay-hover);
   box-shadow: 0 10px 18px rgba(196, 132, 42, 0.32);
 }
 

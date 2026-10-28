@@ -3,6 +3,11 @@
     "title": "Dimi's Lessons",
     "description": "A calm place for lessons, homework, and payments."
   },
+  "theme": {
+    "label": "Theme",
+    "light": "Light theme",
+    "dark": "Dark theme"
+  },
   "nav": {
     "today": "Students",
     "money": "Financial",
@@ -14,7 +19,7 @@
     "signOut": "Sign out"
   },
   "welcome": {
-    "kicker": "01  A studio for lessons",
+    "kicker": "A studio for lessons",
     "lead": "One tap after class.",
     "signIn": "Sign in",
     "register": "Register a student",
@@ -31,7 +36,12 @@
   },
   "auth": {
     "signInTitle": "Sign in",
-    "signInLead": "Use your email and password. A teacher, a parent, and a student each open a different place.",
+    "signInLead": "Teachers and parents use an email and a password. Students use the name and PIN from their teacher.",
+    "register": "Register a student",
+    "join": "I am the other parent",
+    "chooseTitle": "Choose a password",
+    "chooseLead": "This is the password you will use next time.",
+    "chooseSave": "Save password",
     "email": "Email",
     "password": "Password",
     "role": "Who",
@@ -55,9 +65,10 @@
     "back": "Back"
   },
   "register": {
-    "kicker": "02  Registration",
+    "kicker": "Registration",
     "title": "Who will study",
     "lead": "Fill this in for the student. If they pay for themselves, say so. Otherwise add the first parent.",
+    "privacy": "Your teacher and the parents linked to this student can see what you send.",
     "studentHeading": "The person who will study",
     "paysSelf": "This person pays for themselves",
     "paysSelfLead": "Turn this on when they handle their own lessons. A second parent can be linked later.",
@@ -82,8 +93,9 @@
     "subject": "Subject",
     "submit": "Send registration",
     "thanksTitle": "Registration sent",
-    "thanksLead": "When Dimi confirms it, sign in with the same email.",
-    "signIn": "Go to sign in"
+    "thanksLead": "When your teacher confirms it, you will get an email to choose a password.",
+    "signIn": "Go to sign in",
+    "otherParent": "I am the other parent"
   },
   "subjects": {
     "math": "Math",
@@ -131,7 +143,7 @@
     "credit": "{amount} credit"
   },
   "today": {
-    "kicker": "03  Students",
+    "kicker": "Students",
     "title": "My students",
     "add": "Add a client",
     "lesson": "Lesson",
@@ -149,7 +161,7 @@
     "emptyArchiveLead": "Students you are no longer teaching will wait here."
   },
   "money": {
-    "kicker": "04  Financial",
+    "kicker": "Financial",
     "title": "Who to reach",
     "emptyTitle": "Everyone is up to date",
     "emptyLead": "No student is running low on lessons or hours.",
@@ -159,7 +171,7 @@
     "noContact": "No phone or email on this profile."
   },
   "client": {
-    "newKicker": "05  New client",
+    "newKicker": "New client",
     "newTitle": "Add someone you teach",
     "save": "Save client",
     "name": "Name",
@@ -287,7 +299,7 @@
     "archived": "Archived"
   },
   "signups": {
-    "kicker": "06  Signups",
+    "kicker": "Signups",
     "title": "Waiting for you",
     "emptyTitle": "No pending registrations",
     "emptyLead": "When a parent fills in the form, it will land here.",
@@ -299,10 +311,26 @@
     "declineAsk": "Decline this signup?",
     "declineLead": "It leaves the waiting list.",
     "child": "Student",
-    "parent": "Parent"
+    "parent": "Parent",
+    "otherParent": "Another parent",
+    "otherParentLead": "Someone asked to be linked with a student code. Nothing opens until you accept.",
+    "forStudent": "For {name}"
+  },
+  "join": {
+    "kicker": "Another parent",
+    "title": "Join a student",
+    "lead": "Enter the student's code, plus your name and email. The teacher confirms it before you can see the lessons.",
+    "privacy": "Your teacher and the parents linked to this student can see what you send.",
+    "name": "Your name",
+    "email": "Email",
+    "code": "Student code",
+    "submit": "Send request",
+    "thanksTitle": "Request sent",
+    "thanksLead": "When the teacher confirms it, you will get an email to choose a password.",
+    "signIn": "Go to sign in"
   },
   "feedback": {
-    "kicker": "07  Feedback",
+    "kicker": "Feedback",
     "title": "How the lessons feel",
     "emptyTitle": "No feedback yet",
     "emptyLead": "Ask a parent from their student's page, or wait for a note.",
@@ -345,7 +373,7 @@
     "parentLabel": "Parent"
   },
   "settings": {
-    "kicker": "08  Settings",
+    "kicker": "Settings",
     "title": "Your contact",
     "lead": "Parents see your name and phone, and can tap to call.",
     "name": "Name",
@@ -362,7 +390,7 @@
     "cancel": "Cancel"
   },
   "parent": {
-    "kicker": "09  Your students",
+    "kicker": "Your students",
     "title": "Lessons",
     "emptyTitle": "No students linked yet",
     "emptyLead": "When a registration is confirmed, the lessons show up here.",
@@ -394,7 +422,7 @@
     "childLessons": "Lessons"
   },
   "studentHome": {
-    "kicker": "10  Your lessons",
+    "kicker": "Your lessons",
     "title": "Homework and what you studied",
     "code": "Your code",
     "teacher": "Teacher",
@@ -424,7 +452,8 @@
     "emailTaken": "That email is already used.",
     "invalidAmount": "Enter a valid amount.",
     "invalidPin": "Use 4 to 6 digits for the PIN.",
-    "unknownCode": "That code does not match a profile."
+    "unknownCode": "That code does not match a profile.",
+    "short": "Use at least 8 characters."
   },
   "common": {
     "optional": "Optional",
