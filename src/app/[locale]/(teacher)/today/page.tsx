@@ -7,7 +7,7 @@ import { StatusLine } from "@/components/pack-dot";
 import { Link } from "@/i18n/navigation";
 import { restoreStudent } from "@/lib/actions";
 import { requireSession } from "@/lib/auth";
-import { getTeacherById, listClients } from "@/lib/db";
+import { listClients } from "@/lib/db";
 import { choiceOptions, labelOf } from "@/lib/labels";
 import { describePack, type Tone } from "@/lib/stats";
 
@@ -19,14 +19,17 @@ export default async function TodayPage({
   const query = await searchParams;
   const archived = query.view === "archive";
   const session = await requireSession("teacher");
-  const teacher = (await getTeacherById(session.user_id))!;
-  const locale = await getLocale();
-  const t = await getTranslations("today");
-  const clientCopy = await getTranslations("client");
-  const common = await getTranslations("common");
-  const status = await getTranslations("status");
-  const options = await choiceOptions();
-  const clients = (await listClients(teacher.id, archived ? "archived" : "active")).sort((a, b) => {
+  // The teacher's id is session.user_id, so the clients load straight away
+  const [locale, t, clientCopy, common, status, options, rows] = await Promise.all([
+    getLocale(),
+    getTranslations("today"),
+    getTranslations("client"),
+    getTranslations("common"),
+    getTranslations("status"),
+    choiceOptions(),
+    listClients(session.user_id, archived ? "archived" : "active"),
+  ]);
+  const clients = rows.sort((a, b) => {
     const left = packRank(describePack(a.billing_mode, a.stats, packText(status)).tone);
     const right = packRank(describePack(b.billing_mode, b.stats, packText(status)).tone);
     if (left !== right) return left - right;

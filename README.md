@@ -85,7 +85,7 @@ The 3D book loads after the text and stops rendering when it is off screen. With
 | Languages | **next-intl 4** | `/en` and `/bg` routes; all copy is in `messages/en.json` and `messages/bg.json`. |
 | Fonts | `next/font/google` | EB Garamond (display), Plus Jakarta Sans and Nunito (text), Caveat (handwriting on the landing page). |
 | Language and tooling | **TypeScript 6**, ESLint 9 (`eslint-config-next`) | `npm run lint`, `npx tsc --noEmit`. |
-| Hosting | **Vercel** + Supabase in an EU region | `https://dims-lessons.vercel.app` |
+| Hosting | **Vercel** (functions in `fra1`, set in `vercel.json`) + Supabase in an EU region | Keep the two in the same region: every page makes several database calls. |
 
 ### How the pieces fit
 

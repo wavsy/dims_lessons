@@ -22,9 +22,13 @@ export default async function TeacherLayout({
     throw new Error("Redirect failed");
   }
 
-  const t = await getTranslations("nav");
-  const signups = (await pendingRegistrationCount()) + (await pendingParentRequestCount());
-  const feedback = await openRequestCount();
+  const [t, registrations, parentRequests, feedback] = await Promise.all([
+    getTranslations("nav"),
+    pendingRegistrationCount(),
+    pendingParentRequestCount(),
+    openRequestCount(),
+  ]);
+  const signups = registrations + parentRequests;
 
   return (
     <Shell

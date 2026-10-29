@@ -1,32 +1,34 @@
-import { getLocale, getTranslations } from "next-intl/server";
+import { getTranslations } from "next-intl/server";
 import { EmptyState } from "@/components/empty-state";
 import { PhoneLink } from "@/components/phone-link";
 import { StatusLine } from "@/components/pack-dot";
 import { Link } from "@/i18n/navigation";
 import { requireSession } from "@/lib/auth";
-import { getTeacherById, listClients, listParentsOfClient } from "@/lib/db";
+import { listClients, listParentsOfClient } from "@/lib/db";
 import { formatCode } from "@/lib/format";
 import { describePack, packFigure } from "@/lib/stats";
 
 export default async function MoneyPage() {
   const session = await requireSession("teacher");
-  const teacher = (await getTeacherById(session.user_id))!;
-  const locale = await getLocale();
-  const t = await getTranslations("money");
-  const clientCopy = await getTranslations("client");
-  const status = await getTranslations("status");
-  const clients = await listClients(teacher.id);
-  const cards = (
-    await Promise.all(
-      clients.map(async (client) => {
-        const pack = packFigure(client.billing_mode, client.stats);
-        const described = describePack(client.billing_mode, client.stats, (key, values) =>
-          status(key as "leftOne", values as never),
-        );
-        return { client, pack, described, parents: await listParentsOfClient(client.id) };
-      }),
-    )
-  ).filter(({ pack }) => pack.kind === "over" || (pack.kind === "left" && pack.count <= 2));
+  // The teacher's id is session.user_id, so the clients load straight away
+  const [t, clientCopy, status, clients] = await Promise.all([
+    getTranslations("money"),
+    getTranslations("client"),
+    getTranslations("status"),
+    listClients(session.user_id),
+  ]);
+  // Only people who need a follow-up are shown, so only their parents are looked up
+  const due = clients
+    .map((client) => ({ client, pack: packFigure(client.billing_mode, client.stats) }))
+    .filter(({ pack }) => pack.kind === "over" || (pack.kind === "left" && pack.count <= 2));
+  const cards = await Promise.all(
+    due.map(async ({ client, pack }) => ({
+      client,
+      pack,
+      described: describePack(client.billing_mode, client.stats, (key, values) => status(key as "leftOne", values as never)),
+      parents: await listParentsOfClient(client.id),
+    })),
+  );
 
   return (
     <div>

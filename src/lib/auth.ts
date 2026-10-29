@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { getLocale } from "next-intl/server";
 import { redirect } from "@/i18n/navigation";
@@ -19,7 +20,14 @@ function missingConfig(error: unknown) {
   return error instanceof Error && error.message.includes("are not set");
 }
 
-export async function getSession(): Promise<Session | null> {
+// One auth round trip per request: the layout and the page both ask who is signed in.
+const currentUser = cache(async () => {
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getUser();
+  return data.user;
+});
+
+export const getSession = cache(async (): Promise<Session | null> => {
   const jar = await cookies();
   const studentId = jar.get(STUDENT_COOKIE)?.value;
   if (studentId) {
@@ -34,13 +42,12 @@ export async function getSession(): Promise<Session | null> {
   }
 
   try {
-    const supabase = await createClient();
-    const { data } = await supabase.auth.getUser();
-    if (!data.user) return null;
-    const profile = await ensureProfile(data.user);
+    const user = await currentUser();
+    if (!user) return null;
+    const profile = await ensureProfile(user);
     if (!profile || (profile.role !== "teacher" && profile.role !== "parent")) return null;
     return {
-      id: data.user.id,
+      id: user.id,
       role: profile.role,
       user_id: profile.id,
       created_at: profile.created_at ?? "",
@@ -50,13 +57,12 @@ export async function getSession(): Promise<Session | null> {
     if (missingConfig(error)) return null;
     throw error;
   }
-}
+});
 
 export async function passwordStillNeeded() {
   try {
-    const supabase = await createClient();
-    const { data } = await supabase.auth.getUser();
-    return Boolean(data.user?.user_metadata?.must_set_password);
+    const user = await currentUser();
+    return Boolean(user?.user_metadata?.must_set_password);
   } catch (error) {
     if (missingConfig(error)) return false;
     throw error;

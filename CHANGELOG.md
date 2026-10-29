@@ -3,6 +3,24 @@
 Every change to the studio is written down here: what changed, why, and what to check.
 The newest entry is at the top. Dates are in YYYY-MM-DD.
 
+## 2026-10-28 · Faster pages
+
+### Why
+On the live site every signed-in page waited about 0.6–1 s.
+- The server code ran in Washington (`iad1`, the Vercel default) while the database is in the EU. Each query crossed the Atlantic, and a page made about six of them one after another.
+- There was no loading state, so a tap on the menu looked frozen until the server finished.
+
+### What changed
+- **`vercel.json`: functions run in Frankfurt (`fra1`)**, next to the EU database. If the Supabase project is in Ireland, use `dub1` instead.
+- **One auth check per request.** `getSession` and the user lookup are wrapped in React `cache()` (`src/lib/auth.ts`). The layout and the page used to ask Supabase twice each, and the parent layout three times.
+- **Teacher layout:** the three badge counts load in parallel instead of one after another.
+- **Today and Money:** the clients load in parallel with the translations, and the extra teacher lookup is gone (`session.user_id` is the teacher's id). Money looks up parents only for the people it actually shows.
+- **Loading states:** `loading.tsx` for the teacher, parent and student rooms, with a soft skeleton (`page-skeleton.tsx`). The menu stays in place and the content area shows placeholders straight away.
+
+### What to check
+- After the deploy, the `x-vercel-id` response header should contain `::fra1::` (or `::dub1::`).
+- Signed in as the teacher: Today, Money, Signups. Each tap shows the skeleton at once and the data soon after.
+
 ## 2026-10-28 · Landing page, film, README, security update
 
 ### Security
