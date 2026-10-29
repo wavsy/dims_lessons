@@ -34,7 +34,7 @@ function PageDoodles({ side }: { side: "left" | "right" }) {
   );
 }
 
-export function BookMark() {
+export function BookMark({ intro = false, coverTitle }: { intro?: boolean; coverTitle?: string } = {}) {
   const sceneRef = useRef<HTMLDivElement>(null);
   const orbitRef = useRef<HTMLDivElement>(null);
 
@@ -142,6 +142,8 @@ export function BookMark() {
       currentTX += (targetTX - currentTX) * ease;
       currentTY += (targetTY - currentTY) * ease;
       orbit!.style.transform = `translate3d(${currentTX.toFixed(2)}px, ${currentTY.toFixed(2)}px, 0) rotateX(${currentX.toFixed(2)}deg) rotateY(${currentY.toFixed(2)}deg)`;
+      scene!.style.setProperty("--sheen-x", `${(50 - currentY * 2.4).toFixed(1)}%`);
+      scene!.style.setProperty("--sheen-o", (0.18 + Math.abs(currentY) / 90).toFixed(3));
       frame = requestAnimationFrame(tick);
     }
 
@@ -158,7 +160,7 @@ export function BookMark() {
   }, []);
 
   return (
-    <div ref={sceneRef} className="spell-scene" aria-hidden="true">
+    <div ref={sceneRef} className={`spell-scene${intro ? " is-intro" : ""}`} aria-hidden="true">
       <div className="spell-glow" />
       <div ref={orbitRef} className="spell-orbit">
         <div className="spellbook">
@@ -178,7 +180,16 @@ export function BookMark() {
             </div>
             <div className="spell-gutter" />
             <div className="spell-ribbon" />
+            <div className="spell-sheen" />
           </div>
+          {intro ? (
+            <div className="spell-cover">
+              <div className="spell-cover-face spell-cover-front">
+                <span className="spell-cover-title">{coverTitle}</span>
+              </div>
+              <div className="spell-cover-face spell-cover-back" />
+            </div>
+          ) : null}
         </div>
       </div>
       <span className="mote mote-a" />

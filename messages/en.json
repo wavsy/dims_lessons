@@ -459,5 +459,73 @@
     "optional": "Optional",
     "copy": "Copy",
     "copied": "Copied"
+  },
+  "landing": {
+    "cover": "Dimi's Lessons",
+    "kicker": "How it works",
+    "title": "Four years of paper notebooks, open to everyone who needs them.",
+    "chapter": "Chapter",
+    "of": "of",
+    "chapters": [
+      {
+        "name": "Today",
+        "title": "One tap after class.",
+        "body": "Who is next, then one note: what you studied and the homework. The family sees the date before you have packed up."
+      },
+      {
+        "name": "Money",
+        "title": "A ledger that stays quiet.",
+        "body": "Prices, payments and prepaid packs live with the lessons. Open balances and packs running low rise to the top. When everyone is settled, the page says so."
+      },
+      {
+        "name": "Family",
+        "title": "The parent reads the same page.",
+        "body": "Parents see every lesson, the homework and the payments, and can leave feedback. The record stays exactly as the teacher wrote it."
+      },
+      {
+        "name": "Student",
+        "title": "Homework waits under their own name.",
+        "body": "A student signs in with their name and a PIN. They see what was studied and what is due, and nothing about money."
+      }
+    ],
+    "page": {
+      "today": {
+        "date": "Tue, 28 Oct",
+        "r1": "Maria",
+        "s1": "Algebra",
+        "r2": "Ivan",
+        "s2": "Geometry",
+        "r3": "Sofia",
+        "s3": "Exam prep",
+        "saved": "saved"
+      },
+      "money": {
+        "r1": "Ivan",
+        "v1": "€40 open",
+        "r2": "Maria",
+        "v2": "2 lessons left",
+        "settled": "Everyone else is up to date."
+      },
+      "family": {
+        "lesson": "14 Oct · Quadratic equations",
+        "homework": "Homework: p. 42, tasks 1–6",
+        "note": "“Clear now, thank you!”",
+        "readOnly": "read only"
+      },
+      "student": {
+        "todo": "To do",
+        "task": "p. 42, tasks 1–6",
+        "studied": "Studied",
+        "topic": "Quadratic equations",
+        "pin": "PIN"
+      }
+    },
+    "filmKicker": "See it in 40 seconds",
+    "filmTitle": "The whole studio, in one short film.",
+    "play": "Play the film",
+    "close": "Close",
+    "endTitle": "Open the notebook.",
+    "endLead": "Teachers and parents sign in with email. Students use their name and PIN.",
+    "bookNote": "everyone, one page."
   }
 }
